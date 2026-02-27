@@ -84,7 +84,7 @@ def plan_route(request):
         # 构建POI GeoJSON（水站）
         poi_features = []
         for route in routes_with_desc:
-            for ws in route.get("water_stations", []):
+            for ws in route.get("water_stations_list", []):
                 poi_features.append({
                     "type": "Feature",
                     "properties": {
@@ -159,6 +159,8 @@ def _add_route_descriptions(routes, intent, user_query):
 
         # 水站数量（前端用 water_stations 数字）
         ws_count = route.get("water_station_count", 0)
+        # 保留原始水站列表（用于POI构建），前端显示用整数
+        route_copy["water_stations_list"] = route.get("water_stations", [])
         route_copy["water_stations"] = ws_count
 
         # 海景点（前端用 sea_view_pois）
