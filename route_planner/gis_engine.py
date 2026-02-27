@@ -195,8 +195,8 @@ def _plan_loop_route(G, nodes, start_node, start_lat, start_lon,
     # 每段目标距离（3段环路）
     segment_dist = target_dist / 3.0
     
-    # 每段直线距离估算（路网迂回系数约1.4）
-    CIRCUITY = 1.4
+    # 每段直线距离估算（路网迂回系数实际约1.6-1.8，用较小值保证搜索范围足够大）
+    CIRCUITY = 1.3  # 降低迂回系数，让搜索范围更大
     straight_per_segment = segment_dist / CIRCUITY
     
     # 三个中间点的方向（基于配置的主方向，间隔约120度）
@@ -207,9 +207,9 @@ def _plan_loop_route(G, nodes, start_node, start_lat, start_lon,
         (base_dir + 240) % 360,
     ]
     
-    # 搜索半径范围
-    min_r = straight_per_segment * 0.5
-    max_r = straight_per_segment * 1.5
+    # 搜索半径范围（扩大上限到2.5倍，确保能找到足够远的节点）
+    min_r = straight_per_segment * 0.4
+    max_r = straight_per_segment * 2.5
     
     best_route = None
     best_dist_diff = float("inf")
@@ -277,6 +277,36 @@ def _plan_loop_route(G, nodes, start_node, start_lat, start_lon,
                 # 如果误差在15%内，停止搜索
                 if diff / target_dist < 0.15:
                     break
+    
+    # 如果最好路线距离不足目标的80%，尝试增加第4段补偿路段
+    if best_route and best_route["total_dist"] < target_dist * 0.80:
+        logger.info("Route too short (%.1fkm < %.1fkm), adding compensation segment",
+                    best_route["total_dist"]/1000, target_dist/1000)
+        deficit = target_dist - best_route["total_dist"]
+        # 在路线中间找一个补偿绕行点
+        comp_straight = deficit / 2 / CIRCUITY
+        comp_candidates = find_nodes_in_ring(
+            nodes, start_lat, start_lon,
+            min_dist_m=comp_straight * 0.5,
+            max_dist_m=comp_straight * 2.0,
+            direction_angle=(base_dir + 60) % 360,
+            angle_tolerance=120,
+        )
+        if comp_candidates:
+            random.shuffle(comp_candidates)
+            comp_node = comp_candidates[0][0]
+            # 将补偿段插入到第1段和第2段之间
+            wp0 = best_route["waypoints"][0]
+            path_comp1, dist_comp1 = shortest_path_dist(G, wp0, comp_node, base_params)
+            path_comp2, dist_comp2 = shortest_path_dist(G, comp_node, best_route["waypoints"][1] if len(best_route["waypoints"]) > 1 else start_node, base_params)
+            if path_comp1 and path_comp2 and dist_comp1 > 100 and dist_comp2 > 100:
+                new_total = best_route["dists"][0] + dist_comp1 + dist_comp2 + (best_route["dists"][-1] if len(best_route["dists"]) > 2 else 0)
+                if new_total > best_route["total_dist"]:
+                    best_route["paths"] = [best_route["paths"][0], path_comp1, path_comp2] + (best_route["paths"][2:] if len(best_route["paths"]) > 2 else [])
+                    best_route["dists"] = [best_route["dists"][0], dist_comp1, dist_comp2] + (best_route["dists"][2:] if len(best_route["dists"]) > 2 else [])
+                    best_route["total_dist"] = sum(best_route["dists"])
+                    best_route["waypoints"] = [best_route["waypoints"][0], comp_node] + best_route["waypoints"][1:]
+                    logger.info("After compensation: %.1fkm", best_route["total_dist"]/1000)
     
     # 如果环路找不到，回退到往返路线
     if not best_route:
