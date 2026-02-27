@@ -1,5 +1,5 @@
 """
-Django REST API视图 v4.0
+Django REST API视图 v5.0
 集成真实GIS引擎（NetworkX + PostgreSQL路网）和DeepSeek LLM意图解析
 """
 import json
@@ -19,13 +19,14 @@ def health_check(request):
     """健康检查接口"""
     return JsonResponse({
         "status": "ok",
-        "version": "4.0",
+        "version": "5.0",
         "data_source": "PostgreSQL + NetworkX + 真实厦门OSM路网",
         "features": [
             "真实路网34812节点65965路段",
-            "NetworkX最短路径算法",
+            "多段环路算法（三角形路线）",
+            "NetworkX加权最短路径",
             "NDVI植被分析",
-            "海景/绿化/综合三条差异化路线",
+            "目标距离误差<15%",
         ],
     })
 
@@ -80,6 +81,23 @@ def plan_route(request):
             "name": intent.get("start_location", "椰风寨"),
         }
 
+        # 构建POI GeoJSON（水站）
+        poi_features = []
+        for route in routes_with_desc:
+            for ws in route.get("water_stations", []):
+                poi_features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "name": ws.get("name", "水站"),
+                        "type": "water",
+                        "category": "补给水站",
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [ws.get("lon", 118.0850), ws.get("lat", 24.4380)],
+                    },
+                })
+
         return JsonResponse(
             {
                 "success": True,
@@ -88,6 +106,10 @@ def plan_route(request):
                 "routes": routes_with_desc,
                 "recommended_route_id": routes_with_desc[0]["id"] if routes_with_desc else None,
                 "start_point": start_point,
+                "poi_geojson": {
+                    "type": "FeatureCollection",
+                    "features": poi_features,
+                },
                 "data_source": "PostgreSQL + NetworkX + 真实厦门OSM路网（34812节点）",
                 "performance": {
                     "total_time_s": t_total,
@@ -107,19 +129,76 @@ def plan_route(request):
 
 
 def _add_route_descriptions(routes, intent, user_query):
-    """为每条路线生成LLM自然语言推荐语"""
-    from openai import OpenAI
-
-    client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY", ""),
-        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"),
-    )
-
+    """为每条路线生成LLM自然语言推荐语，并补全前端所需字段"""
     result = []
     rank_labels = ["推荐", "备选", "参考"]
 
     for i, route in enumerate(routes):
         rank = rank_labels[i] if i < 3 else "参考"
+
+        # 生成LLM推荐语
+        description = _generate_description(route, intent, user_query, rank)
+
+        route_copy = dict(route)
+        route_copy["description"] = description
+        route_copy["rank"] = rank
+
+        # ===== 前端字段兼容映射 =====
+        # 路线ID和名称
+        route_copy["route_id"] = route.get("id", chr(65 + i))
+        route_copy["label"] = route.get("name", f"路线{chr(65+i)}")
+
+        # 距离（前端用 total_length_km）
+        dist_km = route.get("distance_km", 0)
+        route_copy["total_length_km"] = dist_km
+
+        # 树荫/植被（前端用 shade_pct）
+        green = route.get("green_coverage", 0)
+        route_copy["shade_pct"] = green
+        route_copy["shade_coverage_pct"] = green
+
+        # 水站数量（前端用 water_stations 数字）
+        ws_count = route.get("water_station_count", 0)
+        route_copy["water_stations"] = ws_count
+
+        # 海景点（前端用 sea_view_pois）
+        coastal = route.get("coastal_ratio", 0)
+        route_copy["sea_view_pois"] = max(1, int(coastal / 20)) if coastal > 0 else 0
+
+        # 台阶（前端用 has_steps）
+        route_copy["has_steps"] = False  # 默认无台阶（算法已避免台阶）
+
+        # 路面类型（前端用 dominant_surface）
+        route_copy["dominant_surface"] = "asphalt"
+
+        # 综合评分
+        score = min(100, int(
+            dist_km * 3 +
+            green * 0.3 +
+            coastal * 0.2 +
+            ws_count * 5
+        ))
+        route_copy["comprehensive_score"] = score
+        route_copy["score"] = score
+
+        # 坐标（前端用 coords，格式 [[lat,lon],...]）
+        coords = route.get("coordinates", [])
+        # 确保格式正确（已是 [[lat,lon],...] 格式）
+        route_copy["coords"] = coords
+
+        result.append(route_copy)
+
+    return result
+
+
+def _generate_description(route, intent, user_query, rank):
+    """生成单条路线的LLM推荐语"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY", ""),
+            base_url=os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"),
+        )
 
         prompt = f"""你是专业跑步教练AI，请用热情专业的语气为以下路线写一段80-120字的推荐语。
 
@@ -138,36 +217,21 @@ def _add_route_descriptions(routes, intent, user_query):
 
 直接输出推荐语，不要有任何前缀或引号。"""
 
-        try:
-            resp = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.7,
-            )
-            description = resp.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"[API] LLM描述生成失败: {e}")
-            description = (
-                f"{rank}路线！{route['name']}全程{route['distance_km']}公里，"
-                f"植被覆盖{route['green_coverage']}%，途经{route['water_station_count']}个水站，"
-                f"累计爬升{route['elevation_gain_m']}米，预计用时{route['estimated_time_min']}分钟。"
-            )
+        resp = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content.strip()
 
-        route_copy = dict(route)
-        route_copy["description"] = description
-        route_copy["rank"] = rank
-        # 兼容旧前端字段名
-        route_copy["route_id"] = route["id"]
-        route_copy["label"] = route["name"]
-        route_copy["total_length_km"] = route["distance_km"]
-        route_copy["shade_coverage_pct"] = route.get("green_coverage", 0)
-        route_copy["shade_pct"] = route.get("green_coverage", 0)
-        route_copy["comprehensive_score"] = min(100, int(route["distance_km"] * 5))
-        route_copy["score"] = route_copy["comprehensive_score"]
-        result.append(route_copy)
-
-    return result
+    except Exception as e:
+        print(f"[API] LLM描述生成失败: {e}")
+        return (
+            f"{rank}路线！{route['name']}全程{route['distance_km']}公里，"
+            f"植被覆盖{route['green_coverage']}%，途经{route['water_station_count']}个水站，"
+            f"累计爬升{route['elevation_gain_m']}米，预计用时{route['estimated_time_min']}分钟。"
+        )
 
 
 @require_http_methods(["GET"])
