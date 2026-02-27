@@ -8,11 +8,20 @@ import json
 import re
 from openai import OpenAI
 
-# DeepSeek API配置（通过环境变量注入，支持Railway部署）
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY", ""),
-    base_url=os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"),
-)
+# DeepSeek API配置（懒加载，避免模块导入时因环境变量未就绪而崩溃）
+_client = None
+
+
+def _get_client():
+    """懒加载OpenAI客户端"""
+    global _client
+    if _client is None:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        _client = OpenAI(api_key=api_key, base_url=base_url)
+    return _client
 
 INTENT_PARSE_PROMPT = """你是专业的运动路线规划AI助手，将用户的自然语言运动需求解析为严格的JSON格式参数。
 
@@ -47,7 +56,7 @@ def parse_user_intent(user_input: str) -> dict:
     prompt = INTENT_PARSE_PROMPT.format(user_input=user_input)
 
     try:
-        response = client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "你是专业的运动路线规划助手，只返回JSON格式数据，不含任何其他文字。"},
@@ -107,7 +116,7 @@ def generate_route_description(route: dict, user_input: str) -> str:
 请直接给出推荐语，不要有"推荐语："等前缀。"""
 
     try:
-        response = client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
