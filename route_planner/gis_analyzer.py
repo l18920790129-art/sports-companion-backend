@@ -67,14 +67,15 @@ def load_road_network_from_db() -> Tuple[nx.Graph, Dict]:
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-    # 加载节点
-    cursor.execute("SELECT id, name, lat, lon FROM road_nodes ORDER BY id;")
+    # 加载节点（road_nodes表只有id, lat, lon字段）
+    cursor.execute("SELECT id, lat, lon FROM road_nodes ORDER BY id;")
     nodes_raw = cursor.fetchall()
-    nodes = {row["id"]: {"lat": row["lat"], "lon": row["lon"], "name": row["name"]} for row in nodes_raw}
+    nodes = {row["id"]: {"lat": row["lat"], "lon": row["lon"], "name": ""} for row in nodes_raw}
 
-    # 加载边
+    # 加载边（road_edges表字段：source, target, length_m, highway, surface, name, ndvi, has_shade）
     cursor.execute("""
-        SELECT from_node, to_node, length_m, highway, surface, road_name, ndvi, shade_score
+        SELECT source, target, length_m, highway, surface, name as road_name,
+               ndvi, has_shade, has_water_station, is_coastal, slope_deg
         FROM road_edges;
     """)
     edges_raw = cursor.fetchall()
@@ -88,13 +89,16 @@ def load_road_network_from_db() -> Tuple[nx.Graph, Dict]:
 
     for edge in edges_raw:
         G.add_edge(
-            edge["from_node"], edge["to_node"],
+            edge["source"], edge["target"],
             length=edge["length_m"],
-            highway=edge["highway"],
-            surface=edge["surface"],
-            road_name=edge["road_name"],
-            ndvi=edge["ndvi"],
-            shade_score=edge["shade_score"],
+            highway=edge["highway"] or "path",
+            surface=edge["surface"] or "asphalt",
+            road_name=edge["road_name"] or "",
+            ndvi=edge["ndvi"] or 0.3,
+            shade_score=1.0 if edge["has_shade"] else 0.0,
+            has_water_station=edge["has_water_station"] or False,
+            is_coastal=edge["is_coastal"] or False,
+            slope_deg=edge["slope_deg"] or 0.0,
         )
 
     _cached_graph = G
@@ -137,7 +141,7 @@ def query_poi_from_db(poi_types: List[str], center_lat: float, center_lon: float
                    geom::geography,
                    ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
                ) AS dist_m
-        FROM poi_points
+        FROM pois
         WHERE poi_type IN ({placeholders})
           AND ST_DWithin(
               geom::geography,
@@ -164,7 +168,7 @@ def query_elevation_along_route(path_coords: List[Tuple[float, float]]) -> float
     for lat, lon in path_coords:
         cursor.execute("""
             SELECT elevation_m
-            FROM dem_elevation
+            FROM dem_points
             ORDER BY ST_Distance(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
             LIMIT 1;
         """, (lon, lat))
@@ -299,15 +303,17 @@ def calculate_route_metrics_from_db(G: nx.DiGraph, nodes: Dict, path_nodes: List
     hard_count = 0
     edge_count = 0
 
+    total_shade = 0
     for i in range(len(path_nodes) - 1):
         u, v = path_nodes[i], path_nodes[i+1]
         if G.has_edge(u, v):
             edge = G[u][v]
             length = edge.get('length', 100)
             total_length += length
-            total_ndvi += edge.get('ndvi', 0.35)
+            total_ndvi += edge.get('ndvi', 0.3)
+            total_shade += edge.get('shade_score', 0.0)
             surface = edge.get('surface', 'asphalt')
-            if surface in ['unpaved', 'ground', 'grass', 'dirt', 'gravel']:
+            if surface in ['unpaved', 'ground', 'grass', 'dirt', 'gravel', 'fine_gravel']:
                 soft_count += 1
             else:
                 hard_count += 1
@@ -315,7 +321,9 @@ def calculate_route_metrics_from_db(G: nx.DiGraph, nodes: Dict, path_nodes: List
 
     distance_km = total_length / 1000
     avg_ndvi = total_ndvi / max(edge_count, 1)
-    shade_pct = min(95, int(avg_ndvi * 100))
+    avg_shade = total_shade / max(edge_count, 1)
+    # 树荫覆盖率：综合shade_score和NDVI计算
+    shade_pct = min(95, int(avg_shade * 60 + avg_ndvi * 40))
     soft_pct = soft_count / max(edge_count, 1) * 100
 
     # 从DEM数据库查询高程
@@ -365,7 +373,7 @@ def count_poi_along_route(path_nodes: List[int], nodes: Dict, poi_type: str, buf
     seen_pois = set()
     for lat, lon in route_points[::max(1, len(route_points)//5)]:  # 采样查询
         cursor.execute("""
-            SELECT id FROM poi_points
+            SELECT id FROM pois
             WHERE poi_type = %s
               AND ST_DWithin(
                   geom::geography,
