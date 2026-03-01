@@ -359,7 +359,7 @@ def calculate_route_metrics_from_db(G: nx.DiGraph, nodes: Dict, path_nodes: List
     }
 
 
-def count_poi_along_route(path_nodes: List[int], nodes: Dict, poi_type: str, buffer_m: float = 300) -> int:
+def count_poi_along_route(path_nodes: List[int], nodes: Dict, poi_type: str, buffer_m: float = 500) -> int:
     """统计路线缓冲区内的POI数量"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -369,10 +369,13 @@ def count_poi_along_route(path_nodes: List[int], nodes: Dict, poi_type: str, buf
     if not route_points:
         return 0
 
-    # 查询路线缓冲区内的POI
-    count = 0
+    # 采用固定间隔采样，每50个节点取一个采样点，确保覆盖全路线
+    step = max(1, min(50, len(route_points) // 20))
+    sampled = route_points[::step]
+
+    # 构建多点缓冲区，一次性查询所有水站
     seen_pois = set()
-    for lat, lon in route_points[::max(1, len(route_points)//5)]:  # 采样查询
+    for lat, lon in sampled:
         cursor.execute("""
             SELECT id FROM pois
             WHERE poi_type = %s
@@ -383,12 +386,10 @@ def count_poi_along_route(path_nodes: List[int], nodes: Dict, poi_type: str, buf
               );
         """, (poi_type, lon, lat, buffer_m))
         for row in cursor.fetchall():
-            if row[0] not in seen_pois:
-                seen_pois.add(row[0])
-                count += 1
+            seen_pois.add(row[0])
 
     conn.close()
-    return count
+    return len(seen_pois)
 
 
 def path_to_geojson(nodes: Dict, path_nodes: List[int]) -> dict:
