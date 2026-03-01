@@ -1,15 +1,23 @@
 """
 LLM意图解析模块
 将用户自然语言运动需求转化为结构化GIS查询参数
-使用 OpenAI 兼容接口（支持 gemini-2.5-flash）
+使用 OpenAI 兼容接口（支持 DeepSeek / Gemini 等）
 """
 import os
 import json
 import re
 from openai import OpenAI
 
+# 从环境变量读取模型名称，默认使用 deepseek-chat
+# Railway 上配置的是 deepseek-chat，本地沙盒可配置为 gemini-2.5-flash
+LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+
 # 使用环境变量中已配置的API Key和Base URL
-client = OpenAI()
+# Railway 上：OPENAI_API_KEY=DeepSeek密钥，OPENAI_BASE_URL=https://api.deepseek.com/v1
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url=os.environ.get("OPENAI_BASE_URL"),
+)
 
 INTENT_PARSE_PROMPT = """你是一个专业的运动路线规划助手，负责将用户的自然语言运动需求解析为结构化的JSON参数。
 
@@ -40,7 +48,7 @@ def parse_user_intent(user_input: str) -> dict:
     prompt = INTENT_PARSE_PROMPT.format(user_input=user_input)
 
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": "你是专业的运动路线规划助手，只返回JSON格式数据。"},
             {"role": "user", "content": prompt}
@@ -79,7 +87,7 @@ def generate_route_description(route: dict, user_input: str) -> str:
 请直接给出推荐语，不要有"推荐语："等前缀。"""
 
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=LLM_MODEL,
         messages=[
             {"role": "user", "content": prompt}
         ],
