@@ -5,4 +5,5 @@ urlpatterns = [
     path('plan/', views.plan_route, name='plan_route'),
     path('health/', views.health_check, name='health_check'),
     path('map-data/', views.get_map_data, name='get_map_data'),
+    path('data-sources/', views.get_data_sources, name='get_data_sources'),
 ]

@@ -3,6 +3,9 @@ Django REST API 视图
 """
 import json
 import time
+import os
+import psycopg2
+import psycopg2.extras
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -120,6 +123,104 @@ def rank_routes(routes: list, params: dict) -> str:
     return best
 
 
+def get_db_conn():
+    return psycopg2.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        port=int(os.environ.get("DB_PORT", 5432)),
+        dbname=os.environ.get("DB_NAME", "sports_companion"),
+        user=os.environ.get("DB_USER", "sports_user"),
+        password=os.environ.get("DB_PASSWORD", "SportsPgPass2024x"),
+    )
+
+
 @require_http_methods(["GET"])
 def health_check(request):
-    return JsonResponse({"status": "ok", "service": "Sports Companion API", "version": "1.0.0"})
+    db_info = {}
+    try:
+        conn = get_db_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT (SELECT COUNT(*) FROM road_nodes),(SELECT COUNT(*) FROM road_edges),
+                   (SELECT COUNT(*) FROM pois),(SELECT COUNT(*) FROM dem_points),
+                   (SELECT COUNT(*) FROM ndvi_samples)
+        """)
+        row = cur.fetchone()
+        db_info = {"road_nodes": row[0], "road_edges": row[1], "pois": row[2], "dem_points": row[3], "ndvi_samples": row[4]}
+        conn.close()
+    except Exception as e:
+        db_info = {"error": str(e)}
+    return JsonResponse({
+        "status": "ok", "service": "Sports Companion API", "version": "3.0.0",
+        "database": "PostgreSQL/PostGIS (Railway Cloud)", "city": "厦门市",
+        "database_stats": db_info
+    })
+
+
+@require_http_methods(["GET"])
+def get_data_sources(request):
+    """
+    数据来源信息接口
+    GET /api/data-sources/
+    返回系统使用的各类GIS数据的来源信息
+    """
+    try:
+        conn = get_db_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("""
+            SELECT data_type, source_name, source_url, description,
+                   coverage_area, resolution, update_frequency,
+                   record_count, last_updated::text, icon
+            FROM data_sources ORDER BY id
+        """)
+        sources_raw = cur.fetchall()
+        cur.execute("""
+            SELECT (SELECT COUNT(*) FROM road_nodes) as nodes,
+                   (SELECT COUNT(*) FROM road_edges) as edges,
+                   (SELECT COUNT(*) FROM pois) as pois,
+                   (SELECT COUNT(*) FROM dem_points) as dem,
+                   (SELECT COUNT(*) FROM ndvi_samples) as ndvi
+        """)
+        stats = cur.fetchone()
+        conn.close()
+        sources = []
+        for row in sources_raw:
+            source = dict(row)
+            if row['data_type'] == 'road_network':
+                source['record_count'] = stats['nodes'] + stats['edges']
+                source['detail'] = f"{stats['nodes']:,}个路网节点 + {stats['edges']:,}条路段"
+            elif row['data_type'] == 'dem':
+                source['record_count'] = stats['dem']
+                source['detail'] = f"{stats['dem']}个高程采样点（覆盖厦门市全域）"
+            elif row['data_type'] == 'ndvi':
+                source['record_count'] = stats['ndvi']
+                source['detail'] = f"{stats['ndvi']}个植被指数采样点（覆盖厦门市全域）"
+            elif row['data_type'] == 'poi':
+                source['record_count'] = stats['pois']
+                source['detail'] = f"{stats['pois']}个兴趣点（水站/景区/医疗/便利店等）"
+            elif row['data_type'] == 'llm':
+                source['detail'] = "实时API调用，用于自然语言理解与路线描述生成"
+            sources.append(source)
+        return JsonResponse({
+            "success": True, "city": "厦门市",
+            "database": "PostgreSQL 14 + PostGIS 3.4",
+            "database_host": "Railway Cloud",
+            "total_records": stats['nodes'] + stats['edges'] + stats['pois'] + stats['dem'] + stats['ndvi'],
+            "sources": sources
+        }, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_map_data(request):
+    """地图POI数据接口 GET /api/map-data/"""
+    try:
+        conn = get_db_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute("SELECT id, name, type, lat, lon, description FROM pois ORDER BY type, name")
+        pois = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        return JsonResponse({"success": True, "pois": pois, "city": "厦门市"}, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
