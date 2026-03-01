@@ -460,18 +460,24 @@ def build_waypoint_route(G: nx.DiGraph, nodes: Dict, start_node: int,
 
     # 如果距离不够，在最后一个锤点和起点之间插入额外延伸
     if current_len < target_m * 0.75:
-        # 找一个中间节点增加距离
+        # 找一个中间节点增加距离（限制搜索范围避免超时）
         last_wp = valid_waypoints[-1] if valid_waypoints else start_node
         distances_from_last = {}
         try:
-            distances_from_last = nx.single_source_dijkstra_path_length(G, last_wp, weight='length')
+            # 限制搜索半径，避免全图遍历超时
+            cutoff = (target_m - current_len) * 1.5
+            distances_from_last = dict(nx.single_source_dijkstra_path_length(
+                G, last_wp, cutoff=cutoff, weight='length'
+            ))
         except Exception:
             pass
 
         extra_needed = target_m - current_len
         best_extra = None
         best_diff = float('inf')
-        for nid, dist in distances_from_last.items():
+        # 只检查前500个候选节点，避免超时
+        candidates = sorted(distances_from_last.items(), key=lambda x: abs(x[1] - extra_needed/2))[:500]
+        for nid, dist in candidates:
             if nid == start_node or nid == last_wp:
                 continue
             # 检查从该节点能否回到起点
@@ -551,10 +557,10 @@ def generate_routes_from_db(params: dict) -> List[dict]:
             "route_id": "ROUTE_B",
         },
         {
-            "name": "路线C：白城-筼筜湖-西北环线",
-            "highlight": "向西北经白城沙滩和筼筜湖绿道，树荫最多，地形起伏小，适合轻松跑",
-            # 强制锚点：西北方向节点(lat=24.47, lon=118.07, 距起点3.9km)
-            "waypoints": [1425909345, 1425909343],
+            "name": "路线C：椰风寨-白城-北向大环线",
+            "highlight": "向正北延伸至白城片区，途经山海观景台，树荫最多，地形起伏小，适合轻松跑",
+            # 强制锚点：正北方向高连通性节点(lat=24.507, lon=118.089, 距起点7.7km，来回约15km)
+            "waypoints": [1422598228, 2386195825],
             "route_id": "ROUTE_C",
         },
     ]
