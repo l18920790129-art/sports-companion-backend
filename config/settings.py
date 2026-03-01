@@ -1,11 +1,14 @@
+"""
+Django settings for Sports Companion Route Planner
+"""
 from pathlib import Path
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-qsh4=%1k06mwktmwa2ag03q%17x#4j0gmzek271$qll9-rw6rk')
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-qsh4=%1k06mwktmwa2ag03q%17x#4j0gmzek271$qll9-rw6rk')
 
-DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = ['*']
 
@@ -38,7 +41,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -75,10 +78,14 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-CORS_ALLOW_ALL_ORIGINS = True
+# 前端静态文件目录
+STATICFILES_DIRS = [BASE_DIR / 'frontend']
 
-# LLM Config
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
+# LLM Config - 使用环境变量中已配置的 OPENAI_API_KEY
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
-LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini-2.5-flash')
+LLM_MODEL = 'gemini-2.5-flash'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
