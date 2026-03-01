@@ -348,6 +348,7 @@ def calculate_route_metrics_from_db(G: nx.DiGraph, nodes: Dict, path_nodes: List
 
     return {
         "distance_km": round(distance_km, 2),
+        "duration_min": estimated_time,
         "estimated_time_min": estimated_time,
         "shade_coverage_pct": shade_pct,
         "avg_ndvi": round(avg_ndvi, 3),
@@ -536,24 +537,24 @@ def generate_routes_from_db(params: dict) -> List[dict]:
     # 路线C：北向，白城-菲林路
     route_configs = [
         {
-            "name": "路线A：椰风寨-黄厝-环岛路东段环线",
+            "name": "路线A：椰风寨-胡里山炮台-环岛路东段环线",
             "highlight": "沿环岛路向东，途经胡里山炮台和黄厝海滨，海景绝佳，路面平缓，水站充足",
-            # 强制锚点：环岛路中段(lon118.13) → 环岛路东段(lon118.18)
-            "waypoints": [12849826415, 1422596481, 3145105563],
+            # 强制锚点：环岛路中段(距起点4.4km, lon=118.13)
+            "waypoints": [11423294125, 7845290836],
             "route_id": "ROUTE_A",
         },
         {
-            "name": "路线B：环岛路-曾厝垵-五缘湾北段大环线",
-            "highlight": "向东北方向延伸，途经曾厝垵文创区和五缘湾，风景多样，爬升适中",
-            # 强制锚点：东北方向高纬度节点(lat24.55)
-            "waypoints": [1422599110, 1410454252],
+            "name": "路线B：环岛路-山顶公园-北段大环线",
+            "highlight": "向正北方向延伸，途经山顶公园和山海观景台，风景多样，爬升适中",
+            # 强制锚点：正北方向节点(lat=24.48, 距起点4.7km)
+            "waypoints": [5263810724, 5263810729],
             "route_id": "ROUTE_B",
         },
         {
             "name": "路线C：白城-筼筜湖-西北环线",
             "highlight": "向西北经白城沙滩和筼筜湖绿道，树荫最多，地形起伏小，适合轻松跑",
-            # 强制锚点：西北方向节点(lat24.53, lon118.05)
-            "waypoints": [4663202287, 4663202309],
+            # 强制锚点：西北方向节点(lat=24.47, lon=118.07, 距起点3.9km)
+            "waypoints": [1425909345, 1425909343],
             "route_id": "ROUTE_C",
         },
     ]
