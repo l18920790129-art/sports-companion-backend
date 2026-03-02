@@ -8,11 +8,15 @@ import json
 import re
 from openai import OpenAI
 
-# 使用环境变量中已配置的API Key和Base URL
-client = OpenAI()
+# 延迟初始化：每次调用时读取最新环境变量，避免启动时读取旧值
+def get_client():
+    api_key = os.environ.get('OPENAI_API_KEY')
+    base_url = os.environ.get('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
+    return OpenAI(api_key=api_key, base_url=base_url)
 
-# 从环境变量读取模型名，默认使用 deepseek-ai/DeepSeek-V3
-LLM_MODEL = os.environ.get('LLM_MODEL', 'deepseek-ai/DeepSeek-V3')
+# 从环境变量读取模型名，默认使用 deepseek-chat
+def get_model():
+    return os.environ.get('LLM_MODEL', 'deepseek-chat')
 
 INTENT_PARSE_PROMPT = """你是一个专业的运动路线规划助手，负责将用户的自然语言运动需求解析为结构化的JSON参数。
 
@@ -52,9 +56,10 @@ def parse_user_intent(user_input: str) -> dict:
     调用LLM解析用户自然语言意图，返回结构化参数字典
     """
     prompt = INTENT_PARSE_PROMPT.format(user_input=user_input)
+    client = get_client()
 
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=get_model(),
         messages=[
             {"role": "system", "content": "你是专业的运动路线规划助手，只返回JSON格式数据。"},
             {"role": "user", "content": prompt}
@@ -92,8 +97,9 @@ def generate_route_description(route: dict, user_input: str) -> str:
 
 请直接给出推荐语，不要有"推荐语："等前缀。"""
 
+    client = get_client()
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=get_model(),
         messages=[
             {"role": "user", "content": prompt}
         ],
