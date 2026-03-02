@@ -11,6 +11,9 @@ from openai import OpenAI
 # 使用环境变量中已配置的API Key和Base URL
 client = OpenAI()
 
+# 从环境变量读取模型名，默认使用 deepseek-ai/DeepSeek-V3
+LLM_MODEL = os.environ.get('LLM_MODEL', 'deepseek-ai/DeepSeek-V3')
+
 INTENT_PARSE_PROMPT = """你是一个专业的运动路线规划助手，负责将用户的自然语言运动需求解析为结构化的JSON参数。
 
 请从用户输入中提取以下信息，并以严格的JSON格式返回，字段说明如下：
@@ -51,7 +54,7 @@ def parse_user_intent(user_input: str) -> dict:
     prompt = INTENT_PARSE_PROMPT.format(user_input=user_input)
 
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": "你是专业的运动路线规划助手，只返回JSON格式数据。"},
             {"role": "user", "content": prompt}
@@ -90,7 +93,7 @@ def generate_route_description(route: dict, user_input: str) -> str:
 请直接给出推荐语，不要有"推荐语："等前缀。"""
 
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=LLM_MODEL,
         messages=[
             {"role": "user", "content": prompt}
         ],
