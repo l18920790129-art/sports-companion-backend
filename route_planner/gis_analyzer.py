@@ -332,11 +332,13 @@ def calculate_route_metrics_from_db(G: nx.DiGraph, nodes: Dict, path_nodes: List
     sampled_coords = path_coords[::max(1, len(path_coords)//10)]
     elevation_gain = query_elevation_along_route(sampled_coords)
 
-    # 计算预计用时
+    # 计算预计用时：用实际路线距离×配速（反映真实运动时间）
     intensity = params.get("intensity", "中等")
     activity = params.get("activity_type", "跑步")
     pace = PACE_MAP.get(intensity, PACE_MAP.get(activity, 6.0))
     estimated_time = int(distance_km * pace)
+    # 用户输入的目标时长（用于前端展示参考）
+    user_duration = params.get("duration_min", estimated_time)
 
     # 路面描述
     if soft_pct > 60:
@@ -522,6 +524,84 @@ def build_waypoint_route(G: nx.DiGraph, nodes: Dict, start_node: int,
     return full_path
 
 
+# 三条路线的方向锚点配置（按距离比例动态选取，确保路线差异化）
+# 每条路线定义方向向量和候选锚点列表，系统根据目标距离自动选择合适的锚点
+ROUTE_DIRECTION_CONFIGS = [
+    {
+        "name": "路线A：椰风寨-胡里山炮台-环岛路东段环线",
+        "highlight": "沿环岛路向东，途经胡里山炮台和黄厝海滨，海景绝佳，路面平缓，水站充足",
+        "route_id": "ROUTE_A",
+        # 方向：向东（lon增大），按距离从近到远排列锚点
+        "direction": "east",
+        "anchor_lat": 24.438,
+        "anchor_lon_offset": 1.0,  # 正数=向东
+        "anchor_lat_offset": 0.0,
+    },
+    {
+        "name": "路线B：环岛路-山顶公园-北段大环线",
+        "highlight": "向正北方向延伸，途经山顶公园和山海观景台，风景多样，爬升适中",
+        "route_id": "ROUTE_B",
+        # 方向：向北偏东（lat增大，lon略增）
+        "direction": "north_east",
+        "anchor_lat": 24.438,
+        "anchor_lon_offset": 0.3,
+        "anchor_lat_offset": 1.0,  # 正数=向北
+    },
+    {
+        "name": "路线C：椰风寨-白城-北向大环线",
+        "highlight": "向正北延伸至白城片区，途经山海观景台，树荫最多，地形起伏小，适合轻松跑",
+        "route_id": "ROUTE_C",
+        # 方向：向北偏西（lat增大，lon略减）
+        "direction": "north_west",
+        "anchor_lat": 24.438,
+        "anchor_lon_offset": -0.3,
+        "anchor_lat_offset": 1.0,
+    },
+]
+
+
+def find_dynamic_waypoints(nodes: Dict, start_node: int, target_km: float,
+                            anchor_lat: float, anchor_lon_offset: float,
+                            anchor_lat_offset: float) -> List[int]:
+    """
+    根据目标距离动态计算锚点：
+    在起点坐标基础上，沿指定方向偏移 target_km/2 对应的经纬度，
+    找到最近的路网节点作为中间锚点，确保来回总距离接近目标。
+    """
+    start_lat = nodes[start_node]["lat"]
+    start_lon = nodes[start_node]["lon"]
+
+    # 1度纬度 ≈ 111km，1度经度 ≈ 111km * cos(lat)
+    lat_per_km = 1.0 / 111.0
+    lon_per_km = 1.0 / (111.0 * math.cos(math.radians(start_lat)))
+
+    # 目标半程距离（来回，所以锚点在 target/2 处）
+    half_km = target_km / 2.0
+
+    # 计算锚点坐标（沿方向偏移 half_km）
+    total_offset = math.sqrt(anchor_lon_offset**2 + anchor_lat_offset**2)
+    if total_offset == 0:
+        total_offset = 1.0
+    norm_lon = anchor_lon_offset / total_offset
+    norm_lat = anchor_lat_offset / total_offset
+
+    target_lat = start_lat + norm_lat * half_km * lat_per_km
+    target_lon = start_lon + norm_lon * half_km * lon_per_km
+
+    # 找最近节点作为主锚点
+    waypoint1 = find_nearest_node(nodes, target_lat, target_lon)
+
+    # 在主锚点附近再找一个次锚点（偏移10%距离），增加路线多样性
+    target_lat2 = start_lat + norm_lat * half_km * 0.6 * lat_per_km
+    target_lon2 = start_lon + norm_lon * half_km * 0.6 * lon_per_km
+    waypoint2 = find_nearest_node(nodes, target_lat2, target_lon2)
+
+    waypoints = [waypoint2, waypoint1] if waypoint2 != waypoint1 else [waypoint1]
+    print(f"[GIS] 动态锚点: 目标{target_km}km, 半程{half_km:.1f}km, "
+          f"锚点坐标({target_lat:.4f},{target_lon:.4f}), 节点{waypoints}")
+    return waypoints
+
+
 def generate_routes_from_db(params: dict) -> List[dict]:
     """
     从 PostGIS数据库加载路网，生成三条备选路线
@@ -538,33 +618,19 @@ def generate_routes_from_db(params: dict) -> List[dict]:
     start_node = find_nearest_node(nodes, STUDY_AREA_CENTER[0], STUDY_AREA_CENTER[1])
     print(f"[GIS] 起点节点: {start_node}（{nodes.get(start_node, {}).get('name', '未知')}），目标距离: {target_km}km")
 
-    # 三条路线的强制锤点（waypoints），确保路线差异化
-    # 路线A：南向，海滨步道，经灯塔
-    # 路线B：东向，环岛路主线，经黄厝
-    # 路线C：北向，白城-菲林路
-    route_configs = [
-        {
-            "name": "路线A：椰风寨-胡里山炮台-环岛路东段环线",
-            "highlight": "沿环岛路向东，途经胡里山炮台和黄厝海滨，海景绝佳，路面平缓，水站充足",
-            # 强制锚点：环岛路中段(距起点4.4km, lon=118.13)
-            "waypoints": [11423294125, 7845290836],
-            "route_id": "ROUTE_A",
-        },
-        {
-            "name": "路线B：环岛路-山顶公园-北段大环线",
-            "highlight": "向正北方向延伸，途经山顶公园和山海观景台，风景多样，爬升适中",
-            # 强制锚点：正北方向节点(lat=24.48, 距起点4.7km)
-            "waypoints": [5263810724, 5263810729],
-            "route_id": "ROUTE_B",
-        },
-        {
-            "name": "路线C：椰风寨-白城-北向大环线",
-            "highlight": "向正北延伸至白城片区，途经山海观景台，树荫最多，地形起伏小，适合轻松跑",
-            # 强制锚点：正北方向高连通性节点(lat=24.507, lon=118.089, 距起点7.7km，来回约15km)
-            "waypoints": [1422598228, 2386195825],
-            "route_id": "ROUTE_C",
-        },
-    ]
+    # 根据目标距离动态计算三条路线的锚点
+    route_configs = []
+    for cfg in ROUTE_DIRECTION_CONFIGS:
+        waypoints = find_dynamic_waypoints(
+            nodes, start_node, target_km,
+            cfg["anchor_lat"], cfg["anchor_lon_offset"], cfg["anchor_lat_offset"]
+        )
+        route_configs.append({
+            "name": cfg["name"],
+            "highlight": cfg["highlight"],
+            "route_id": cfg["route_id"],
+            "waypoints": waypoints,
+        })
 
     routes = []
     for i, config in enumerate(route_configs):
@@ -632,9 +698,11 @@ def calculate_route_score(metrics: dict, params: dict) -> float:
 
 def generate_fallback_route(index: int, config: dict, params: dict, target_km: float) -> dict:
     """备用路线（当路网分析失败时）"""
-    distance_km = target_km * random.uniform(0.85, 1.15)
+    # 备用路线距离严格基于目标距离，加小幅随机浮动（±10%）
+    distance_km = target_km * random.uniform(0.90, 1.10)
     intensity = params.get("intensity", "中等")
-    pace = PACE_MAP.get(intensity, 6.0)
+    activity = params.get("activity_type", "跑步")
+    pace = PACE_MAP.get(intensity, PACE_MAP.get(activity, 6.0))
     estimated_time = int(distance_km * pace)
 
     fallback_data = [

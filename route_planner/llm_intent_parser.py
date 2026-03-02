@@ -1,23 +1,15 @@
 """
 LLM意图解析模块
 将用户自然语言运动需求转化为结构化GIS查询参数
-使用 OpenAI 兼容接口（支持 DeepSeek / Gemini 等）
+使用 OpenAI 兼容接口（支持 gemini-2.5-flash）
 """
 import os
 import json
 import re
 from openai import OpenAI
 
-# 从环境变量读取模型名称，默认使用 deepseek-chat
-# Railway 上配置的是 deepseek-chat，本地沙盒可配置为 gemini-2.5-flash
-LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
-
 # 使用环境变量中已配置的API Key和Base URL
-# Railway 上：OPENAI_API_KEY=DeepSeek密钥，OPENAI_BASE_URL=https://api.deepseek.com/v1
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    base_url=os.environ.get("OPENAI_BASE_URL"),
-)
+client = OpenAI()
 
 INTENT_PARSE_PROMPT = """你是一个专业的运动路线规划助手，负责将用户的自然语言运动需求解析为结构化的JSON参数。
 
@@ -29,12 +21,23 @@ preferred_features: 列表，可包含 shade(树荫)/water(水站)/scenic(风景
 avoid_features: 列表，可包含 stairs(台阶)/concrete(水泥路)/traffic(车流)
 surface_preference: soft(软地面)/hard(硬地面)/any(均可)
 health_constraints: 列表，可包含 ankle(脚踝不适)/knee(膝盖不适)/heart(心脏问题)
-estimated_distance_km: 浮点数，根据配速历史估算，耐力跑约6min/km
+estimated_distance_km: 浮点数，根据配速和时长估算路线距离
 user_notes: 其他备注
 
+配速参考（分钟/公里）：
+- 轻松跑: 7.5 min/km
+- 中等跑: 6.5 min/km
+- 耐力跑: 6.0 min/km
+- 高强度跑: 5.0 min/km
+- 散步: 15.0 min/km
+- 徒步: 12.0 min/km
+- 骑行: 3.0 min/km
+
 规则：
+- estimated_distance_km必须根据 duration_min 和对应配速计算：estimated_distance_km = duration_min / 配速
 - 若用户提到脚踝不适，surface_preference设为soft，avoid_features加入stairs和concrete
 - 若用户提到耐力跑，intensity设为耐力，estimated_distance_km = duration_min / 6.0
+- 若用户提到散步，activity_type设为散步，intensity设为轻松，estimated_distance_km = duration_min / 15.0
 - 只返回JSON，不要有任何多余文字
 
 用户输入：{user_input}
@@ -48,7 +51,7 @@ def parse_user_intent(user_input: str) -> dict:
     prompt = INTENT_PARSE_PROMPT.format(user_input=user_input)
 
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model="gemini-2.5-flash",
         messages=[
             {"role": "system", "content": "你是专业的运动路线规划助手，只返回JSON格式数据。"},
             {"role": "user", "content": prompt}
@@ -87,7 +90,7 @@ def generate_route_description(route: dict, user_input: str) -> str:
 请直接给出推荐语，不要有"推荐语："等前缀。"""
 
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model="gemini-2.5-flash",
         messages=[
             {"role": "user", "content": prompt}
         ],
