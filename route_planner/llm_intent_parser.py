@@ -12,6 +12,13 @@ from openai import OpenAI
 def get_client():
     api_key = os.environ.get('OPENAI_API_KEY')
     base_url = os.environ.get('OPENAI_BASE_URL', 'https://api.deepseek.com/v1')
+    # 调试日志：打印实际读取到的环境变量值
+    import logging
+    logging.warning(f'[DEBUG] OPENAI_BASE_URL={repr(base_url)}, OPENAI_API_KEY={repr(api_key[:10] if api_key else None)}')
+    # 如果 base_url 不是合法 URL，强制使用 DeepSeek
+    if not base_url or not base_url.startswith(('http://', 'https://')):
+        logging.warning(f'[DEBUG] base_url 不合法，强制使用 https://api.deepseek.com/v1')
+        base_url = 'https://api.deepseek.com/v1'
     return OpenAI(api_key=api_key, base_url=base_url)
 
 # 从环境变量读取模型名，默认使用 deepseek-chat
