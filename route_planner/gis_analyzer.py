@@ -22,7 +22,7 @@ PACE_MAP = {
     "耐力": 6.0,
     "高强度": 5.0,
     "跑步": 6.0,
-    "骑行": 3.0,
+    "骑行": 4.0,  # 修复：骑行配速应为4.0 min/km，原值3.0导致距离计算偏高
     "徒步": 12.0,
     "散步": 15.0,
 }
@@ -268,7 +268,11 @@ def score_route_for_user(profile: dict, params: dict, target_km: float) -> float
     # 海景偏好
     if "sea_view" in preferred or "scenic" in preferred:
         if profile["is_coastal"]:
-            score += 25
+            # ROUTE_A（环岛路）是纯海景线，给予更高加成
+            if profile["route_id"] == "ROUTE_A":
+                score += 35
+            else:
+                score += 20
     # 树荫偏好
     if "shade" in preferred:
         score += profile["shade_base"] * 0.3
