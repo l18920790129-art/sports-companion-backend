@@ -186,9 +186,9 @@ def rank_routes(routes: list, params: dict) -> str:
         if has_joint_constraint:
             soft_val = route.get("soft_surface_pct", 0)
             if soft_val < 30:
-                # 惩罚力度：每低1%扣2.5分，最多扣75分（确保超过海景偏好+35分）
-                # 例：soft=18% → 惩罚 (30-18)*2.5 = 30分，soft=0% → 惩罚 75分
-                penalty = (30 - soft_val) * 2.5
+                # 固定大额惩罚：确保任何软路面≥0%的路线都优先于软路面<30%的路线
+                # 即使后者有海景加分(+35)，惩罚50分也能强制健康安全优先
+                penalty = 50.0
                 score -= penalty
                 logger.info(
                     "[API] 路线 %s 因软路面不足（%d%%<30%%）施加健康约束惩罚 -%.1f",
