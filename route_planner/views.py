@@ -242,7 +242,7 @@ def health_check(request):
     except Exception as e:
         db_info = {"error": str(e)}
 
-    resp = JsonResponse({
+    return _cors_response({
         "status": "ok",
         "service": "Sports Companion API",
         "version": "5.2.0",
@@ -250,8 +250,6 @@ def health_check(request):
         "city": "厦门市",
         "database_stats": db_info
     })
-    resp["Access-Control-Allow-Origin"] = "*"
-    return resp
 
 
 @require_http_methods(["GET"])
