@@ -24,12 +24,8 @@ from .gis_analyzer import run_full_gis_analysis
 
 
 def _cors_response(data, status=200):
-    """统一添加CORS头（仅作为兜底，主要由 django-cors-headers 中间件处理）"""
-    resp = JsonResponse(data, status=status, json_dumps_params={"ensure_ascii": False})
-    resp["Access-Control-Allow-Origin"] = "*"
-    resp["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    resp["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return resp
+    """构建 JSON 响应，CORS 头完全由 django-cors-headers 中间件处理"""
+    return JsonResponse(data, status=status, json_dumps_params={"ensure_ascii": False})
 
 
 @csrf_exempt
