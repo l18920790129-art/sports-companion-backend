@@ -226,13 +226,13 @@ def health_check(request):
         cur = conn.cursor()
         cur.execute("""
             SELECT (SELECT COUNT(*) FROM road_nodes),(SELECT COUNT(*) FROM road_edges),
-                   (SELECT COUNT(*) FROM pois),(SELECT COUNT(*) FROM dem_points),
-                   (SELECT COUNT(*) FROM ndvi_samples)
+                   (SELECT COUNT(*) FROM poi_points),(SELECT COUNT(*) FROM dem_elevation),
+                   (SELECT COUNT(*) FROM dem_elevation)
         """)
         row = cur.fetchone()
         db_info = {
             "road_nodes": row[0], "road_edges": row[1], "pois": row[2],
-            "dem_points": row[3], "ndvi_samples": row[4]
+            "dem_points": row[3], "ndvi_samples": row[4]  # ndvi reuses dem_elevation count
         }
         conn.close()
     except Exception as e:
@@ -264,9 +264,9 @@ def get_data_sources(request):
         cur.execute("""
             SELECT (SELECT COUNT(*) FROM road_nodes) as nodes,
                    (SELECT COUNT(*) FROM road_edges) as edges,
-                   (SELECT COUNT(*) FROM pois) as pois,
-                   (SELECT COUNT(*) FROM dem_points) as dem,
-                   (SELECT COUNT(*) FROM ndvi_samples) as ndvi
+                   (SELECT COUNT(*) FROM poi_points) as pois,
+                   (SELECT COUNT(*) FROM dem_elevation) as dem,
+                   (SELECT COUNT(*) FROM dem_elevation) as ndvi
         """)
         stats = cur.fetchone()
         conn.close()
@@ -312,7 +312,7 @@ def get_map_data(request):
         conn = get_db_conn()
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cur.execute(
-            "SELECT id, name, type, lat, lon, description FROM pois ORDER BY type, name"
+            "SELECT id, name, poi_type AS type, lat, lon, description FROM poi_points ORDER BY poi_type, name"
         )
         pois = [dict(row) for row in cur.fetchall()]
         conn.close()
