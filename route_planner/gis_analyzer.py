@@ -1,5 +1,5 @@
 """
-GIS空间分析模块 v3.0
+GIS空间分析模块 v3.1
 基于厦门真实GPS坐标数据，动态生成个性化运动路线
 不依赖外部数据库，使用本地真实坐标库（xiamen_routes_db.py）
 
@@ -8,24 +8,39 @@ GIS空间分析模块 v3.0
 2. 根据用户偏好（树荫/海景/软路面/水站）智能排序三条路线
 3. 路线名称、地图轨迹、沿途信息全部真实动态生成
 4. 完全不依赖外部数据库，零配置即可运行
+
+v3.1 修复：
+- 骑行配速查找优先级：activity_type 优先于 intensity，避免骑行距离计算偏低
+- 移除 build_route_metrics 中的随机噪声（random.randint），使用固定基准值保证数据一致性
+- score_route_for_user 中健康约束（脚踝/膝盖）增加软路面不足惩罚，防止偏好加分覆盖安全考量
 """
 import math
-import random
 from typing import List, Dict, Tuple
 
 # ============================================================
 # 配速参考（分钟/公里）
 # ============================================================
-PACE_MAP = {
+
+# 运动类型配速（优先使用）
+ACTIVITY_PACE_MAP = {
+    "骑行": 4.0,
+    "徒步": 12.0,
+    "散步": 15.0,
+    "快走": 10.0,
+    "跑步": 6.0,
+}
+
+# 强度配速（当运动类型无法确定时使用）
+INTENSITY_PACE_MAP = {
     "轻松": 7.5,
     "中等": 6.5,
     "耐力": 6.0,
+    "耐力跑": 6.0,
     "高强度": 5.0,
-    "跑步": 6.0,
-    "骑行": 4.0,  # 修复：骑行配速应为4.0 min/km，原值3.0导致距离计算偏高
-    "徒步": 12.0,
-    "散步": 15.0,
 }
+
+# 兼容旧代码的合并字典（保留供 build_route_metrics 使用）
+PACE_MAP = {**ACTIVITY_PACE_MAP, **INTENSITY_PACE_MAP}
 
 # ============================================================
 # 厦门真实路线坐标库（WGS84，经过地图验证）
@@ -245,19 +260,36 @@ def coords_to_geojson(coords: List[Tuple]) -> Dict:
 
 
 def calculate_target_distance(params: dict) -> float:
-    """根据用户参数计算目标路线距离（公里）"""
+    """
+    根据用户参数计算目标路线距离（公里）
+
+    修复：优先使用 activity_type 查找配速，再 fallback 到 intensity。
+    原逻辑 PACE_MAP.get(intensity) 会在 intensity='轻松' 时使用跑步配速 7.5，
+    导致骑行60分钟只生成约 8km（正确应为约 15km）。
+    """
     duration_min = params.get("duration_min", 60)
     activity_type = params.get("activity_type", "跑步")
     intensity = params.get("intensity", "中等")
 
-    pace = PACE_MAP.get(intensity, PACE_MAP.get(activity_type, 6.0))
+    # 优先按运动类型查找配速，再按强度，最后使用默认值
+    pace = (
+        ACTIVITY_PACE_MAP.get(activity_type)
+        or INTENSITY_PACE_MAP.get(intensity)
+        or 6.0
+    )
     target_km = duration_min / pace
-    print(f"[GIS] 目标距离: {duration_min}min / {pace}min/km = {target_km:.2f}km")
+    print(f"[GIS] 目标距离: {duration_min}min / {pace}min/km = {target_km:.2f}km "
+          f"(activity={activity_type}, intensity={intensity})")
     return round(target_km, 2)
 
 
 def score_route_for_user(profile: dict, params: dict, target_km: float) -> float:
-    """根据用户偏好对路线打分，决定推荐顺序"""
+    """
+    根据用户偏好对路线打分，决定推荐顺序
+
+    修复：当用户有关节约束（脚踝/膝盖）时，对软路面不足的路线施加惩罚，
+    防止偏好加分（如海景+35）完全覆盖健康安全考量。
+    """
     preferred = params.get("preferred_features", [])
     avoid = params.get("avoid_features", [])
     constraints = params.get("health_constraints", [])
@@ -296,6 +328,16 @@ def score_route_for_user(profile: dict, params: dict, target_km: float) -> float
     if intensity in ["轻松"] and profile["route_id"] == "ROUTE_B":
         score += 10
 
+    # 修复：健康约束惩罚
+    # 当用户有关节约束时，软路面低于30%的路线额外扣分，
+    # 确保健康安全不被偏好加分完全覆盖
+    has_joint_constraint = any(c in constraints for c in ["ankle", "knee"])
+    if has_joint_constraint:
+        soft_pct = profile["soft_surface_base"]
+        if soft_pct < 30:
+            penalty = (30 - soft_pct) * 0.8  # 每低1%扣0.8分，最多扣24分
+            score -= penalty
+
     return round(score, 1)
 
 
@@ -304,21 +346,27 @@ def build_route_metrics(profile: dict, coords: List[Tuple], params: dict,
     """
     根据路线坐标和用户参数，计算路线的所有指标
     rank: 0=最推荐, 1=次选, 2=第三
+
+    修复：移除 shade_pct 和 soft_pct 的随机噪声（random.randint(-3, 5)），
+    使用固定基准值，保证同一路线每次返回一致的数据。
+    随机噪声会导致用户每次看到不同的树荫/软路面数据，误导决策。
     """
     actual_dist_m = calc_total_dist(coords)
     actual_dist_km = round(actual_dist_m / 1000, 2)
 
     intensity = params.get("intensity", "中等")
     activity = params.get("activity_type", "跑步")
-    pace = PACE_MAP.get(intensity, PACE_MAP.get(activity, 6.0))
+    # 同样使用修复后的配速查找逻辑
+    pace = ACTIVITY_PACE_MAP.get(activity) or INTENSITY_PACE_MAP.get(intensity) or 6.0
     estimated_time = round(actual_dist_km * pace)
 
     # 根据路线长度动态调整指标（路线越长，水站越多，爬升越多）
     dist_factor = actual_dist_km / 10.0  # 以10km为基准
     water_stations = max(1, round(profile["water_stations_base"] * dist_factor))
     elevation_gain = round(profile["elevation_base"] * actual_dist_km)
-    shade_pct = min(95, profile["shade_base"] + random.randint(-3, 5))
-    soft_pct = min(90, profile["soft_surface_base"] + random.randint(-3, 5))
+    # 修复：使用固定基准值，不加随机噪声，保证数据一致性
+    shade_pct = min(95, profile["shade_base"])
+    soft_pct = min(90, profile["soft_surface_base"])
 
     # 获取沿途水站
     nearby_ws = get_nearby_water_stations(coords)

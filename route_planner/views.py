@@ -24,7 +24,7 @@ from .gis_analyzer import run_full_gis_analysis
 
 
 def _cors_response(data, status=200):
-    """统一添加CORS头"""
+    """统一添加CORS头（仅作为兜底，主要由 django-cors-headers 中间件处理）"""
     resp = JsonResponse(data, status=status, json_dumps_params={"ensure_ascii": False})
     resp["Access-Control-Allow-Origin"] = "*"
     resp["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
@@ -144,12 +144,16 @@ def rank_routes(routes: list, params: dict) -> str:
     综合评分，推荐最优路线。
     优先使用 gis_analyzer 已计算的 score（避免两套评分逻辑冲突）。
     兼容 gis_analyzer（route_id字段）和 gis_engine（id字段）两种返回格式。
+
+    修复：当存在健康约束（脚踝/膝盖）时，对软路面不足的路线施加惩罚，
+    防止用户偏好（如海景+35分）完全压制健康安全考量。
     """
     if not routes:
         return ""
 
     preferred = params.get("preferred_features", [])
     constraints = params.get("health_constraints", [])
+    has_joint_constraint = any(c in constraints for c in ["ankle", "knee"])
 
     scores = {}
     for route in routes:
@@ -180,6 +184,19 @@ def rank_routes(routes: list, params: dict) -> str:
             if "sea_view" in preferred and has_sea_view:
                 score += 35
 
+        # 修复：健康约束惩罚
+        # 当用户有关节约束（脚踝/膝盖）时，软路面低于30%的路线额外扣分，
+        # 确保健康安全权重不被偏好加分完全覆盖。
+        if has_joint_constraint:
+            soft_val = route.get("soft_surface_pct", 0)
+            if soft_val < 30:
+                penalty = (30 - soft_val) * 0.8  # 软路面每低1%扣0.8分，最多扣24分
+                score -= penalty
+                logger.info(
+                    "[API] 路线 %s 因软路面不足（%d%%<30%%）施加健康约束惩罚 -%.1f",
+                    route_id, soft_val, penalty
+                )
+
         scores[route_id] = round(score, 2)
         route["comprehensive_score"] = round(score, 2)
 
@@ -194,12 +211,14 @@ def rank_routes(routes: list, params: dict) -> str:
 def get_db_conn():
     if not HAS_PSYCOPG2:
         raise RuntimeError("psycopg2 未安装")
+    # 安全修复：移除密码默认值，强制要求通过环境变量注入
+    # 若 DB_PASSWORD 未设置，psycopg2 将抛出连接错误，而非使用硬编码密码
     return psycopg2.connect(
         host=os.environ.get("DB_HOST", "localhost"),
         port=int(os.environ.get("DB_PORT", 5432)),
         dbname=os.environ.get("DB_NAME", "sports_companion"),
         user=os.environ.get("DB_USER", "sports_user"),
-        password=os.environ.get("DB_PASSWORD", "SportsPgPass2024x"),
+        password=os.environ.get("DB_PASSWORD", ""),
     )
 
 
@@ -226,7 +245,7 @@ def health_check(request):
     resp = JsonResponse({
         "status": "ok",
         "service": "Sports Companion API",
-        "version": "5.1.0",
+        "version": "5.2.0",
         "database": "PostgreSQL/PostGIS (Railway Cloud)",
         "city": "厦门市",
         "database_stats": db_info

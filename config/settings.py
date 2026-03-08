@@ -81,8 +81,20 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # 前端静态文件目录
 STATICFILES_DIRS = [BASE_DIR / 'frontend']
 
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
+# CORS 安全配置：
+# - 明确指定允许的 Origin，禁止反射任意 Origin
+# - 不使用 credentials（当前系统无用户认证），避免 CORS + Credentials 组合漏洞
+# - 如未来需要认证，须在此处精确列出允许的 Origin，绝不使用 CORS_ALLOW_ALL_ORIGINS
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = False
+CORS_ALLOWED_ORIGINS = [
+    "https://l18920790129-art.github.io",
+]
+# 允许本地开发环境调试
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+]
 
 # LLM Config - 使用环境变量中已配置的 OPENAI_API_KEY
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
