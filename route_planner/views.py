@@ -21,6 +21,7 @@ from django.views.decorators.http import require_http_methods
 
 from .llm_intent_parser import parse_user_intent, generate_route_description
 from .gis_analyzer import run_full_gis_analysis
+from .rag_engine import route_agent, build_rag_context, update_memory
 
 
 def _cors_response(data, status=200):
@@ -105,6 +106,22 @@ def plan_route(request):
         logger.warning("[API] 路线描述生成失败: %s", e)
         t_llm_desc = 0
 
+    # ===== RAG + Agent 增强 =====
+    try:
+        t_agent = time.time()
+        agent_result = route_agent.run(user_query, params, routes)
+        routes = agent_result["routes"]
+        rag_context = agent_result["rag_context"]
+        agent_recommendation = agent_result["recommendation"]
+        t_agent_time = round(time.time() - t_agent, 2)
+        logger.info("[API] Agent规划完成，耗时 %ss", t_agent_time)
+    except Exception as e:
+        logger.warning("[API] Agent规划失败（不影响主流程）: %s", e)
+        rag_context = ""
+        agent_recommendation = {}
+        t_agent_time = 0
+    # ===========================
+
     t_total = round(time.time() - t_start, 2)
     recommended = rank_routes(routes, params)
 
@@ -126,11 +143,14 @@ def plan_route(request):
         "parsed_params": params,
         "routes": routes,
         "recommended_route_id": recommended,
+        "rag_context": rag_context,
+        "agent_steps": agent_recommendation.get("agent_steps", []),
         "performance": {
             "total_time_s": t_total,
             "llm_parse_time_s": t_llm_parse,
             "gis_analysis_time_s": t_gis,
             "llm_description_time_s": t_llm_desc,
+            "agent_time_s": t_agent_time,
         }
     })
 

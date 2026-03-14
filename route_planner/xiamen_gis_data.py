@@ -34,7 +34,7 @@ ROAD_NODES = [
     {"id": "N017", "lon": 118.0680, "lat": 24.4560, "elev": 15, "ndvi": 0.60, "surface": "rubber",  "road": "中山公园环道"},
     {"id": "N018", "lon": 118.0660, "lat": 24.4575, "elev": 16, "ndvi": 0.62, "surface": "rubber",  "road": "中山公园环道"},
     {"id": "N019", "lon": 118.0640, "lat": 24.4590, "elev": 17, "ndvi": 0.65, "surface": "rubber",  "road": "中山公园环道"},
-    {"id": "N020", "lon": 118.0620, "lon": 118.0620, "lat": 24.4580, "elev": 15, "ndvi": 0.63, "surface": "rubber", "road": "中山公园环道"},
+    {"id": "N020", "lon": 118.0620, "lat": 24.4580, "elev": 15, "ndvi": 0.63, "surface": "rubber", "road": "中山公园环道"},  # fix: 移除重复lon字段
     # 胡里山炮台路段 - 海景观景点
     {"id": "N021", "lon": 118.0900, "lat": 24.4450, "elev": 12, "ndvi": 0.35, "surface": "concrete", "road": "胡里山路"},
     {"id": "N022", "lon": 118.0920, "lat": 24.4440, "elev": 18, "ndvi": 0.30, "surface": "concrete", "road": "胡里山路"},
