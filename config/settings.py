@@ -89,6 +89,7 @@ CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = False
 CORS_ALLOWED_ORIGINS = [
     "https://l18920790129-art.github.io",
+    "https://aipaobudezzz-production.up.railway.app",
 ]
 # 允许本地开发环境调试
 CORS_ALLOWED_ORIGIN_REGEXES = [
