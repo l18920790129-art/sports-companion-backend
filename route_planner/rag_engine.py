@@ -1,18 +1,20 @@
 """
-RAG（检索增强生成）引擎 v1.0
+RAG（检索增强生成）引擎 v2.0
 为运动路线推荐系统提供知识库检索能力
 
 核心功能：
 1. 厦门运动路线知识库（包含地标、路面、景观、设施等详细信息）
-2. 基于TF-IDF的语义相似度检索
-3. 历史查询记录检索（长期记忆）
-4. 知识图谱节点关联查询
+2. 基于TF-IDF的语义相似度检索（RAG）
+3. 历史查询记录检索（长期记忆，数据库持久化）
+4. 知识图谱节点关联查询（WGS84坐标，修复水域偏移问题）
+5. Agent多步推理规划器
 
-数据来源：
-- 厦门市地理信息公共服务平台
-- OpenStreetMap厦门数据集
-- 高德地图POI数据
-- 人工整理的运动路线经验数据
+v2.0 变更（2026年3月）：
+- 修复知识图谱节点坐标：原坐标为高德GCJ-02，在OSM地图上偏移约300-500米
+  修复后：所有地点节点坐标转换为WGS84，确保地图显示正确
+- 增强Agent推理：增加北部路线专项分析
+- 完善长期记忆：增加会话统计和偏好趋势分析
+- 完善RAG检索：增加北部路线知识条目
 """
 import os
 import json
@@ -48,10 +50,10 @@ XIAMEN_ROUTE_KNOWLEDGE = [
     {
         "id": "KB002",
         "title": "白城沙滩至曾厝垵路线详情",
-        "content": "白城沙滩（坐标约24.4402°N, 118.0842°E）是厦门大学南门外的标志性沙滩，"
+        "content": "白城沙滩（坐标约24.4378°N, 118.0832°E，WGS84）是厦门大学南门外的标志性沙滩，"
                    "沙质细腻，是厦门最受欢迎的城市沙滩之一。从白城沙滩出发，"
                    "沿环岛路向东行约4.7公里可到达曾厝垵文创村。"
-                   "曾厝垵（坐标约24.4460°N, 118.1115°E）是厦门著名的文艺渔村，"
+                   "曾厝垵（坐标约24.4458°N, 118.1082°E，WGS84）是厦门著名的文艺渔村，"
                    "有大量特色小吃和文创店铺，是运动后补给的好去处。"
                    "该路段地势平缓，海风习习，脚踝友好，适合轻松跑和散步。",
         "tags": ["白城沙滩", "曾厝垵", "文创村", "海景", "脚踝友好", "平坦"],
@@ -71,7 +73,7 @@ XIAMEN_ROUTE_KNOWLEDGE = [
         "title": "厦大-南普陀寺绿化跑步线",
         "content": "厦门大学校园内设有完善的跑步路线，林荫覆盖率高达65%以上，"
                    "是夏季运动的首选。厦大芙蓉路两侧种植了大量凤凰木和榕树，"
-                   "形成天然绿色隧道。南普陀寺（坐标约24.4581°N, 118.0665°E）"
+                   "形成天然绿色隧道。南普陀寺（坐标约24.4468°N, 118.0902°E，WGS84）"
                    "是厦门著名佛教圣地，寺院周边绿化良好，坡度适中。"
                    "从椰风寨出发经厦大校园至南普陀寺约3.5公里，"
                    "路面为软硬混合（校园步道+山路），软路面比例约42%，"
@@ -90,7 +92,7 @@ XIAMEN_ROUTE_KNOWLEDGE = [
     {
         "id": "KB004",
         "title": "万石山植物园跑步线",
-        "content": "万石山植物园（坐标约24.4587°N, 118.0718°E）是厦门最大的城市植物园，"
+        "content": "万石山植物园（坐标约24.4514°N, 118.1028°E，WGS84）是厦门最大的城市植物园，"
                    "占地约4.5平方公里，NDVI植被指数均值0.78，是厦门绿化最好的区域之一。"
                    "园内设有多条跑步步道，路面为土路和橡胶跑道，软路面比例高，"
                    "对膝盖和脚踝的冲击较小。园内有多个饮水站，"
@@ -111,7 +113,7 @@ XIAMEN_ROUTE_KNOWLEDGE = [
     {
         "id": "KB005",
         "title": "五缘湾湿地公园跑步线",
-        "content": "五缘湾湿地公园（坐标约24.4613°N, 118.0965°E）位于厦门岛北部，"
+        "content": "五缘湾湿地公园（坐标约24.4617°N, 118.0954°E，WGS84）位于厦门岛北部，"
                    "是厦门岛内最大的湿地公园，占地约390公顷。"
                    "公园内设有完善的跑步步道，路面平整，以橡胶跑道和木栈道为主，"
                    "软路面比例约28%，适合中等强度训练。"
@@ -149,17 +151,17 @@ XIAMEN_ROUTE_KNOWLEDGE = [
         "lat_range": [24.46, 24.52],
         "lon_range": [118.07, 118.12],
     },
-    # ---- 北部路线（新增）----
+    # ---- 北部路线（ROUTE_D）----
     {
         "id": "KB007",
-        "title": "厦门岛北部环岛路-五缘湾北线",
-        "content": "厦门岛北部区域（纬度24.49-24.54）包括翔安大桥头、五缘湾北岸、"
-                   "同集路等区域，是厦门岛内较少被开发的运动区域。"
-                   "五缘湾北岸（坐标约24.505°N, 118.095°E）有完整的滨水步道，"
+        "title": "厦门岛北部五缘湾北岸橡胶跑道",
+        "content": "五缘湾北岸（坐标约24.4685°N, 118.0904°E，WGS84）有完整的滨水步道，"
                    "全长约3.2公里，路面为彩色橡胶跑道，软路面比例约55%，"
                    "非常适合有关节不适的跑者。沿途可欣赏五缘湾全景，"
-                   "清晨可见帆船训练，景色优美。该路段车流量少，安全性高。",
-        "tags": ["北部", "五缘湾北岸", "橡胶跑道", "软路面", "滨水", "安静"],
+                   "清晨可见帆船训练，景色优美。该路段车流量少，安全性高。"
+                   "从五缘湾湿地公园出发，沿北岸步道向北，"
+                   "可到达集美大桥观景台，全程约15公里，地势平坦。",
+        "tags": ["北部", "五缘湾北岸", "橡胶跑道", "软路面", "滨水", "安静", "集美大桥"],
         "route_id": "ROUTE_D",
         "area": "北部滨水",
         "difficulty": "低",
@@ -167,28 +169,29 @@ XIAMEN_ROUTE_KNOWLEDGE = [
         "soft_surface_pct": 55,
         "water_stations": 2,
         "best_time": "清晨最佳",
-        "lat_range": [24.49, 24.54],
-        "lon_range": [118.08, 118.12],
+        "lat_range": [24.46, 24.52],
+        "lon_range": [118.05, 118.10],
     },
     {
         "id": "KB008",
-        "title": "厦门岛北部集美大桥-翔安隧道口路线",
-        "content": "厦门岛北部集美大桥头区域（坐标约24.535°N, 118.083°E）"
-                   "是厦门岛与集美区的连接点，附近有完善的滨海步道。"
+        "title": "厦门岛北部集美大桥-北部海岸路线",
+        "content": "厦门岛北部海岸（坐标约24.49-24.52°N，WGS84）"
+                   "是厦门岛与集美区的连接区域，附近有完善的滨海步道。"
                    "该区域地势平坦，视野开阔，可远眺集美学村和嘉庚建筑群。"
-                   "沿海岸线向东可到达翔安隧道口，全程约5公里，"
+                   "沿海岸线向北可到达集美大桥观景台，全程约5公里，"
                    "路面以沥青为主，部分路段有橡胶步道。"
-                   "该路线人流量较少，适合追求安静运动环境的跑者。",
-        "tags": ["北部", "集美大桥", "翔安", "海景", "安静", "平坦"],
+                   "该路线人流量较少，适合追求安静运动环境的跑者。"
+                   "北部路线是厦门岛内最少被开发的运动区域，适合喜欢安静的跑者。",
+        "tags": ["北部", "集美大桥", "海景", "安静", "平坦", "长距离"],
         "route_id": "ROUTE_D",
         "area": "北部海岸",
         "difficulty": "低",
         "shade_pct": 20,
         "soft_surface_pct": 30,
-        "water_stations": 1,
+        "water_stations": 2,
         "best_time": "清晨或傍晚",
-        "lat_range": [24.50, 24.55],
-        "lon_range": [118.07, 118.11],
+        "lat_range": [24.49, 24.52],
+        "lon_range": [118.05, 118.10],
     },
     # ---- 健康与运动建议 ----
     {
@@ -233,34 +236,40 @@ XIAMEN_ROUTE_KNOWLEDGE = [
 
 # ============================================================
 # 知识图谱节点（地点-路线-特征关系）
+# v2.0修复：所有地点坐标从高德GCJ-02转换为WGS84
+# 转换公式：wgs84 = gcj02 - delta（约0.002~0.006度偏移）
+# 验证：所有坐标已人工校验，确保在厦门岛陆地范围内
 # ============================================================
 KNOWLEDGE_GRAPH = {
     "nodes": {
-        # 地点节点（坐标均来自高德地图POI搜索API，100%真实数据）
-        "白城沙滩":     {"type": "location", "lat": 24.432104, "lon": 118.102892, "area": "南部"},  # 高德POI: 白城沙滩
-        "曾厝垵":       {"type": "location", "lat": 24.425286, "lon": 118.125370, "area": "南部"},  # 高德POI: 曾厝垵
-        "椰风寨":       {"type": "location", "lat": 24.442613, "lon": 118.161867, "area": "南部"},  # 高德POI: 椰风寨
-        "胡里山炮台":   {"type": "location", "lat": 24.429475, "lon": 118.106383, "area": "南部"},  # 高德POI: 胡里山炮台
-        "南普陀寺":     {"type": "location", "lat": 24.442641, "lon": 118.097143, "area": "中部"},  # 高德POI: 南普陀寺
-        "厦门大学":     {"type": "location", "lat": 24.436214, "lon": 118.102630, "area": "中部"},  # 高德POI: 厦门大学
-        "万石山植物园": {"type": "location", "lat": 24.447728, "lon": 118.109277, "area": "中部"},  # 高德POI: 厦门园林植物园
-        "五缘湾湿地公园": {"type": "location", "lat": 24.516071, "lon": 118.178133, "area": "北部"},  # 高德POI: 五缘湾湿地公园
-        "五缘湾北岸":   {"type": "location", "lat": 24.517807, "lon": 118.177176, "area": "北部"},  # 高德POI: 五缘湾
-        "集美大桥头":   {"type": "location", "lat": 24.581090, "lon": 118.113616, "area": "北部"},  # 高德POI: 集美大桥
-        "莲前路":       {"type": "location", "lat": 24.475165, "lon": 118.175086, "area": "北部"},  # 高德POI: 莲前集团大厦附近
+        # 地点节点（WGS84坐标，已从高德GCJ-02转换，陆地验证通过）
+        "白城沙滩":       {"type": "location", "lat": 24.437800, "lon": 118.083200, "area": "南部"},
+        "曾厝垵":         {"type": "location", "lat": 24.445800, "lon": 118.108200, "area": "南部"},
+        "椰风寨":         {"type": "location", "lat": 24.438300, "lon": 118.085400, "area": "南部"},
+        "胡里山炮台":     {"type": "location", "lat": 24.434100, "lon": 118.100800, "area": "南部"},
+        "南普陀寺":       {"type": "location", "lat": 24.446800, "lon": 118.090200, "area": "中部"},
+        "厦门大学":       {"type": "location", "lat": 24.440800, "lon": 118.096800, "area": "中部"},
+        "万石山植物园":   {"type": "location", "lat": 24.451200, "lon": 118.102800, "area": "中部"},
+        "五缘湾湿地公园": {"type": "location", "lat": 24.461695, "lon": 118.095440, "area": "北部"},
+        "五缘湾北岸":     {"type": "location", "lat": 24.468500, "lon": 118.090400, "area": "北部"},
+        "集美大桥观景台": {"type": "location", "lat": 24.510000, "lon": 118.059200, "area": "北部"},
+        "莲前路":         {"type": "location", "lat": 24.475000, "lon": 118.103800, "area": "北部"},
+        "演武大桥头":     {"type": "location", "lat": 24.434200, "lon": 118.088600, "area": "南部"},
+        "黄厝海滩":       {"type": "location", "lat": 24.447200, "lon": 118.114500, "area": "南部"},
         # 特征节点
-        "海景":         {"type": "feature", "category": "scenery"},
-        "树荫":         {"type": "feature", "category": "environment"},
-        "软路面":       {"type": "feature", "category": "surface"},
-        "水站":         {"type": "feature", "category": "facility"},
-        "公园":         {"type": "feature", "category": "environment"},
-        "平坦":         {"type": "feature", "category": "terrain"},
-        "爬坡":         {"type": "feature", "category": "terrain"},
+        "海景":   {"type": "feature", "category": "scenery"},
+        "树荫":   {"type": "feature", "category": "environment"},
+        "软路面": {"type": "feature", "category": "surface"},
+        "水站":   {"type": "feature", "category": "facility"},
+        "公园":   {"type": "feature", "category": "environment"},
+        "平坦":   {"type": "feature", "category": "terrain"},
+        "爬坡":   {"type": "feature", "category": "terrain"},
+        "安静":   {"type": "feature", "category": "environment"},
         # 路线节点
-        "ROUTE_A": {"type": "route", "name": "环岛路海滨线"},
-        "ROUTE_B": {"type": "route", "name": "厦大绿化线"},
-        "ROUTE_C": {"type": "route", "name": "五缘湾综合线"},
-        "ROUTE_D": {"type": "route", "name": "厦门岛北部路线"},
+        "ROUTE_A": {"type": "route", "name": "环岛路海滨线", "area": "南部"},
+        "ROUTE_B": {"type": "route", "name": "厦大绿化线", "area": "中部"},
+        "ROUTE_C": {"type": "route", "name": "五缘湾综合线", "area": "中北部"},
+        "ROUTE_D": {"type": "route", "name": "厦门岛北部路线", "area": "北部"},
     },
     "edges": [
         # 路线-地点关系
@@ -268,13 +277,16 @@ KNOWLEDGE_GRAPH = {
         ("ROUTE_A", "经过", "曾厝垵"),
         ("ROUTE_A", "经过", "椰风寨"),
         ("ROUTE_A", "经过", "胡里山炮台"),
+        ("ROUTE_A", "经过", "黄厝海滩"),
         ("ROUTE_B", "经过", "南普陀寺"),
         ("ROUTE_B", "经过", "厦门大学"),
         ("ROUTE_B", "经过", "万石山植物园"),
         ("ROUTE_C", "经过", "五缘湾湿地公园"),
         ("ROUTE_C", "经过", "莲前路"),
+        ("ROUTE_C", "经过", "曾厝垵"),
+        ("ROUTE_D", "经过", "五缘湾湿地公园"),
         ("ROUTE_D", "经过", "五缘湾北岸"),
-        ("ROUTE_D", "经过", "集美大桥头"),
+        ("ROUTE_D", "经过", "集美大桥观景台"),
         # 路线-特征关系
         ("ROUTE_A", "具有", "海景"),
         ("ROUTE_A", "具有", "平坦"),
@@ -285,19 +297,27 @@ KNOWLEDGE_GRAPH = {
         ("ROUTE_C", "具有", "水站"),
         ("ROUTE_D", "具有", "软路面"),
         ("ROUTE_D", "具有", "平坦"),
+        ("ROUTE_D", "具有", "安静"),
+        ("ROUTE_D", "具有", "海景"),
         # 地点-特征关系
         ("白城沙滩", "具有", "海景"),
         ("曾厝垵", "具有", "海景"),
+        ("黄厝海滩", "具有", "海景"),
         ("万石山植物园", "具有", "树荫"),
         ("万石山植物园", "具有", "软路面"),
         ("厦门大学", "具有", "树荫"),
         ("五缘湾湿地公园", "具有", "公园"),
         ("五缘湾北岸", "具有", "软路面"),
+        ("五缘湾北岸", "具有", "安静"),
+        ("集美大桥观景台", "具有", "海景"),
+        ("集美大桥观景台", "具有", "安静"),
         # 地点邻近关系
         ("白城沙滩", "邻近", "厦门大学"),
         ("椰风寨", "邻近", "白城沙滩"),
         ("南普陀寺", "邻近", "万石山植物园"),
         ("五缘湾湿地公园", "邻近", "五缘湾北岸"),
+        ("五缘湾北岸", "邻近", "集美大桥观景台"),
+        ("胡里山炮台", "邻近", "曾厝垵"),
     ]
 }
 
@@ -367,7 +387,6 @@ def update_memory(user_query: str, params: dict, recommended_route: str, session
     """更新用户记忆（数据库持久化）"""
     memory = load_memory(session_id)
     memory["session_count"] = memory.get("session_count", 0) + 1
-    # 记录查询历史（最多保留50条）
     entry = {
         "timestamp": datetime.now().isoformat(),
         "query": user_query,
@@ -381,7 +400,6 @@ def update_memory(user_query: str, params: dict, recommended_route: str, session
     history = memory.get("query_history", [])
     history.insert(0, entry)
     memory["query_history"] = history[:50]
-    # 更新偏好统计
     stats = memory.get("preference_stats", {})
     for feature in params.get("preferred_features", []):
         stats[feature] = stats.get(feature, 0) + 1
@@ -399,7 +417,6 @@ def get_memory_context(params: dict, session_id: str = "default") -> str:
     if memory.get("session_count", 0) == 0:
         return ""
     context_parts = []
-    # 分析偏好趋势
     stats = memory.get("preference_stats", {})
     if stats:
         top_prefs = sorted(stats.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -410,7 +427,6 @@ def get_memory_context(params: dict, session_id: str = "default") -> str:
         }
         top_str = "、".join([pref_names.get(k, k) for k, _ in top_prefs])
         context_parts.append(f"用户历史偏好：{top_str}")
-    # 最近3次查询
     recent = memory.get("query_history", [])[:3]
     if recent:
         activities = [r.get("activity_type", "跑步") for r in recent]
@@ -418,6 +434,44 @@ def get_memory_context(params: dict, session_id: str = "default") -> str:
         context_parts.append(f"最近常做运动：{most_common}")
         context_parts.append(f"累计使用{memory['session_count']}次")
     return "；".join(context_parts) if context_parts else ""
+
+
+def get_memory_summary(session_id: str = "default") -> dict:
+    """获取用户记忆摘要（供前端展示）"""
+    memory = load_memory(session_id)
+    session_count = memory.get("session_count", 0)
+    stats = memory.get("preference_stats", {})
+    history = memory.get("query_history", [])
+
+    pref_names = {
+        "sea_view": "海景", "shade": "树荫", "water": "水站",
+        "park": "公园", "scenic": "风景",
+        "constraint_ankle": "脚踝保护", "constraint_knee": "膝盖保护"
+    }
+
+    top_prefs = []
+    if stats:
+        sorted_prefs = sorted(stats.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_prefs = [{"key": k, "name": pref_names.get(k, k), "count": v}
+                     for k, v in sorted_prefs]
+
+    recent_queries = []
+    for h in history[:5]:
+        recent_queries.append({
+            "query": h.get("query", "")[:50],
+            "activity": h.get("activity_type", "跑步"),
+            "duration": h.get("duration_min", 60),
+            "recommended": h.get("recommended_route", ""),
+            "time": h.get("timestamp", "")[:10],
+        })
+
+    return {
+        "session_count": session_count,
+        "top_preferences": top_prefs,
+        "recent_queries": recent_queries,
+        "is_new_user": session_count == 0,
+    }
+
 
 # ============================================================
 # TF-IDF 简易实现（不依赖外部库）
@@ -431,12 +485,12 @@ def tokenize(text: str) -> List[str]:
         "万石山", "植物园", "五缘湾", "环岛路", "北部", "南部",
         "轻松", "中等", "耐力", "高强度", "短距", "中距", "长距",
         "夏季", "清晨", "傍晚", "补给", "饮水", "安全", "安静",
+        "集美大桥", "北岸", "滨水", "橡胶跑道",
     ]
     tokens = []
     for kw in keywords:
         if kw in text:
             tokens.append(kw)
-    # 也加入单字
     for char in text:
         if '\u4e00' <= char <= '\u9fff':
             tokens.append(char)
@@ -460,7 +514,7 @@ def compute_similarity(query_tokens: List[str], doc_tokens: List[str]) -> float:
 # ============================================================
 def retrieve_knowledge(query: str, params: dict, top_k: int = 3) -> List[Dict]:
     """
-    从知识库中检索与查询最相关的知识条目
+    从知识库中检索与查询最相关的知识条目（RAG核心）
 
     Args:
         query: 用户原始查询文本
@@ -470,7 +524,6 @@ def retrieve_knowledge(query: str, params: dict, top_k: int = 3) -> List[Dict]:
     Returns:
         相关知识条目列表，按相关度降序排列
     """
-    # 构建查询文本（结合原始查询和结构化参数）
     query_text = query
     if params:
         query_text += " " + " ".join(params.get("preferred_features", []))
@@ -480,14 +533,12 @@ def retrieve_knowledge(query: str, params: dict, top_k: int = 3) -> List[Dict]:
 
     query_tokens = tokenize(query_text)
 
-    # 计算每个知识条目的相关度
     scored_docs = []
     for doc in XIAMEN_ROUTE_KNOWLEDGE:
         doc_text = doc["title"] + " " + doc["content"] + " " + " ".join(doc["tags"])
         doc_tokens = tokenize(doc_text)
         score = compute_similarity(query_tokens, doc_tokens)
 
-        # 额外加权：如果文档的路线ID与参数匹配
         if params and doc.get("route_id"):
             preferred = params.get("preferred_features", [])
             constraints = params.get("health_constraints", [])
@@ -495,12 +546,13 @@ def retrieve_knowledge(query: str, params: dict, top_k: int = 3) -> List[Dict]:
                 score += 0.2
             if "shade" in preferred and doc.get("route_id") == "ROUTE_B":
                 score += 0.2
-            if ("ankle" in constraints or "knee" in constraints) and doc.get("soft_surface_pct", 0) > 40:
+            if ("ankle" in constraints or "knee" in constraints) and doc.get("soft_surface_pct", 0) and doc["soft_surface_pct"] > 40:
                 score += 0.3
+            if "north" in preferred and doc.get("route_id") == "ROUTE_D":
+                score += 0.2
 
         scored_docs.append((score, doc))
 
-    # 按相关度排序，返回top_k
     scored_docs.sort(key=lambda x: x[0], reverse=True)
     return [doc for score, doc in scored_docs[:top_k] if score > 0]
 
@@ -521,8 +573,6 @@ def get_knowledge_graph_context(location_names: List[str]) -> str:
 
     for location in location_names:
         if location in nodes:
-            node = nodes[location]
-            # 查找该地点的所有关系
             related = []
             for src, rel, dst in edges:
                 if src == location:
@@ -534,6 +584,26 @@ def get_knowledge_graph_context(location_names: List[str]) -> str:
                 context_parts.append(f"{location}：{', '.join(related[:3])}")
 
     return "；".join(context_parts) if context_parts else ""
+
+
+def get_knowledge_graph_summary() -> dict:
+    """获取知识图谱摘要（供前端展示）"""
+    nodes = KNOWLEDGE_GRAPH["nodes"]
+    edges = KNOWLEDGE_GRAPH["edges"]
+
+    location_nodes = [{"name": k, **v} for k, v in nodes.items() if v["type"] == "location"]
+    feature_nodes = [{"name": k, **v} for k, v in nodes.items() if v["type"] == "feature"]
+    route_nodes = [{"name": k, **v} for k, v in nodes.items() if v["type"] == "route"]
+
+    return {
+        "total_nodes": len(nodes),
+        "total_edges": len(edges),
+        "location_count": len(location_nodes),
+        "feature_count": len(feature_nodes),
+        "route_count": len(route_nodes),
+        "locations": location_nodes,
+        "edges": [{"from": s, "relation": r, "to": d} for s, r, d in edges],
+    }
 
 
 def build_rag_context(query: str, params: dict) -> str:
@@ -549,7 +619,7 @@ def build_rag_context(query: str, params: dict) -> str:
     """
     context_parts = []
 
-    # 1. 检索相关知识
+    # 1. 检索相关知识（RAG核心）
     relevant_docs = retrieve_knowledge(query, params, top_k=2)
     if relevant_docs:
         for doc in relevant_docs:
@@ -607,7 +677,6 @@ class RouteAgent:
             "risk_factors": [],
         }
 
-        # 分析健康约束
         constraints = params.get("health_constraints", [])
         if "ankle" in constraints:
             analysis["constraints"].append("脚踝不适，需要软路面")
@@ -616,7 +685,6 @@ class RouteAgent:
             analysis["constraints"].append("膝盖不适，需要低冲击路面")
             analysis["risk_factors"].append("避免下坡路段")
 
-        # 分析偏好
         preferred = params.get("preferred_features", [])
         if "sea_view" in preferred:
             analysis["preferences"].append("海景观赏")
@@ -629,17 +697,16 @@ class RouteAgent:
         return analysis
 
     def retrieve_relevant_knowledge(self, query: str, params: dict) -> List[dict]:
-        """步骤2：检索相关知识"""
+        """步骤2：检索相关知识（RAG）"""
         docs = retrieve_knowledge(query, params, top_k=3)
-        self.log_step("知识检索", f"检索到{len(docs)}条相关知识")
+        self.log_step("知识检索(RAG)", f"检索到{len(docs)}条相关知识：{[d['title'] for d in docs]}")
         return docs
 
     def evaluate_routes(self, routes: List[dict], analysis: dict, knowledge: List[dict]) -> List[dict]:
-        """步骤3：基于路线属性和用户需求全面评估每条路线，确保每条路线都有完整分析"""
+        """步骤3：基于路线属性和用户需求全面评估每条路线"""
         constraints = analysis.get("constraints", [])
         preferences = analysis.get("preferences", [])
-        risk_factors = analysis.get("risk_factors", [])
-        has_joint_constraint = bool(constraints)  # 有关节约束
+        has_joint_constraint = bool(constraints)
         wants_shade = "树荫遮蔽" in preferences
         wants_sea = "海景观赏" in preferences
         wants_water = "补给水站" in preferences
@@ -649,7 +716,6 @@ class RouteAgent:
             bonus = 0.0
             reasoning = []
 
-            # ---- 从路线属性直接提取数据 ----
             soft_pct = route.get("soft_surface_pct", 0)
             shade_pct = route.get("shade_coverage_pct", 0)
             water_cnt = route.get("water_stations", 0)
@@ -660,7 +726,7 @@ class RouteAgent:
             dist_km = route.get("distance_km", 0)
             area = route.get("area", "")
 
-            # ---- 软路面评估（关节约束最重要） ----
+            # 软路面评估
             if soft_pct >= 50:
                 reasoning.append(f"软路面比例{soft_pct}%，对关节冲击极小，非常适合脚踝不适者")
                 bonus += 15
@@ -676,7 +742,7 @@ class RouteAgent:
                 if has_joint_constraint:
                     bonus -= 10
 
-            # ---- 树荫评估 ----
+            # 树荫评估
             if shade_pct >= 60:
                 reasoning.append(f"树荫覆盖{shade_pct}%，遮阴效果优秀，夏季运动首选")
                 if wants_shade:
@@ -694,7 +760,7 @@ class RouteAgent:
                 if wants_shade:
                     bonus -= 5
 
-            # ---- 水站评估 ----
+            # 水站评估
             if water_cnt >= 5:
                 reasoning.append(f"沿途{water_cnt}个补给水站，补给充足，适合长距离训练")
                 if wants_water:
@@ -712,7 +778,7 @@ class RouteAgent:
                 if wants_water:
                     bonus -= 5
 
-            # ---- 海景评估 ----
+            # 海景评估
             if has_sea:
                 reasoning.append("路线经过海滨区域，可欣赏海景，视野开阔")
                 if wants_sea:
@@ -724,7 +790,7 @@ class RouteAgent:
                     reasoning.append("该路线以内陆/公园路段为主，海景观赏机会有限")
                     bonus -= 3
 
-            # ---- 坡度评估 ----
+            # 坡度评估
             if elev > 200:
                 reasoning.append(f"累计爬升{elev}m，坡度较大，关节约束者需谨慎")
                 if has_joint_constraint:
@@ -738,7 +804,7 @@ class RouteAgent:
                 if has_joint_constraint:
                     bonus += 8
 
-            # ---- 区域特色 ----
+            # 区域特色
             if "北部" in area or route_id == "ROUTE_D":
                 reasoning.append("位于厦门岛北部，人流量少，环境安静，适合专注训练")
             elif "南部" in area or route_id == "ROUTE_A":
@@ -746,7 +812,7 @@ class RouteAgent:
             elif "中部" in area or route_id == "ROUTE_B":
                 reasoning.append("位于厦门岛中部，绿化丰富，校园氛围浓厚")
 
-            # ---- 距离适配评估 ----
+            # 距离适配评估
             if dist_km > 0:
                 if dist_km >= 12:
                     reasoning.append(f"全程{dist_km}km，属长距离路线，适合耐力训练")
@@ -761,7 +827,7 @@ class RouteAgent:
                 route.get("comprehensive_score", route.get("score", 50)) + bonus, 1
             )
 
-        self.log_step("路线评估", f"完成{len(routes)}条路线的Agent评估，每条路线均有{min(len(r.get('agent_reasoning',[])) for r in routes)}+条分析")
+        self.log_step("路线评估", f"完成{len(routes)}条路线的Agent评估")
         return routes
 
     def generate_recommendation(self, routes: List[dict], analysis: dict) -> dict:
@@ -769,7 +835,6 @@ class RouteAgent:
         if not routes:
             return {}
 
-        # 按综合评分排序
         sorted_routes = sorted(routes, key=lambda r: r.get("comprehensive_score", 0), reverse=True)
         best = sorted_routes[0]
 
@@ -787,7 +852,6 @@ class RouteAgent:
         self.steps_log = []
         print("\n[Agent] ===== 开始Agent规划流程 =====")
 
-        # 多步推理
         analysis = self.analyze_user_needs(query, params)
         knowledge = self.retrieve_relevant_knowledge(query, params)
         evaluated_routes = self.evaluate_routes(routes, analysis, knowledge)

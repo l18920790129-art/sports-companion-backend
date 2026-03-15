@@ -1,5 +1,9 @@
 """
-Django REST API 视图
+Django REST API 视图 v2.0
+新增接口：
+- GET /api/knowledge-graph/ 知识图谱数据
+- GET /api/memory/ 用户长期记忆摘要
+- GET /api/rag-knowledge/ RAG知识库条目
 """
 import json
 import time
@@ -20,8 +24,12 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .llm_intent_parser import parse_user_intent, generate_route_description
-from .gis_analyzer import run_full_gis_analysis
-from .rag_engine import route_agent, build_rag_context, update_memory
+from .gis_analyzer import run_full_gis_analysis, WATER_STATIONS
+from .rag_engine import (
+    route_agent, build_rag_context, update_memory,
+    get_memory_summary, get_knowledge_graph_summary,
+    XIAMEN_ROUTE_KNOWLEDGE, KNOWLEDGE_GRAPH, retrieve_knowledge
+)
 
 
 def _cors_response(data, status=200):
@@ -42,7 +50,6 @@ def plan_route(request):
     if request.method != "POST":
         return _cors_response({"error": "仅支持POST请求"}, status=405)
 
-    # 解析请求体（兼容非JSON请求，返回400而非500）
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -52,6 +59,8 @@ def plan_route(request):
         )
 
     user_query = body.get("query", "").strip()
+    session_id = body.get("session_id", "default")
+
     if not user_query:
         return _cors_response({"error": "请输入运动需求，例如：我想跑90分钟"}, status=400)
 
@@ -122,6 +131,29 @@ def plan_route(request):
         t_agent_time = 0
     # ===========================
 
+    # ===== 获取RAG检索结果（供前端展示）=====
+    try:
+        rag_docs = retrieve_knowledge(user_query, params, top_k=3)
+        rag_retrieved = [
+            {
+                "id": d.get("id"),
+                "title": d.get("title"),
+                "content": d.get("content", "")[:200] + "...",
+                "tags": d.get("tags", []),
+                "route_id": d.get("route_id"),
+                "area": d.get("area"),
+            }
+            for d in rag_docs
+        ]
+    except Exception:
+        rag_retrieved = []
+
+    # ===== 获取长期记忆摘要（供前端展示）=====
+    try:
+        memory_summary = get_memory_summary(session_id)
+    except Exception:
+        memory_summary = {"session_count": 0, "top_preferences": [], "recent_queries": [], "is_new_user": True}
+
     t_total = round(time.time() - t_start, 2)
     recommended = rank_routes(routes, params)
 
@@ -144,7 +176,10 @@ def plan_route(request):
         "routes": routes,
         "recommended_route_id": recommended,
         "rag_context": rag_context,
+        "rag_retrieved_docs": rag_retrieved,
         "agent_steps": agent_recommendation.get("agent_steps", []),
+        "memory_summary": memory_summary,
+        "water_stations": WATER_STATIONS,
         "performance": {
             "total_time_s": t_total,
             "llm_parse_time_s": t_llm_parse,
@@ -156,14 +191,7 @@ def plan_route(request):
 
 
 def rank_routes(routes: list, params: dict) -> str:
-    """
-    综合评分，推荐最优路线。
-    优先使用 gis_analyzer 已计算的 score（避免两套评分逻辑冲突）。
-    兼容 gis_analyzer（route_id字段）和 gis_engine（id字段）两种返回格式。
-
-    修复：当存在健康约束（脚踝/膝盖）时，对软路面不足的路线施加惩罚，
-    防止用户偏好（如海景+35分）完全压制健康安全考量。
-    """
+    """综合评分，推荐最优路线。"""
     if not routes:
         return ""
 
@@ -200,14 +228,9 @@ def rank_routes(routes: list, params: dict) -> str:
             if "sea_view" in preferred and has_sea_view:
                 score += 35
 
-        # 修复：健康约束惩罚
-        # 当用户有关节约束（脚踝/膝盖）时，软路面低于30%的路线额外扣分，
-        # 确保健康安全权重不被偏好加分完全覆盖。
         if has_joint_constraint:
             soft_val = route.get("soft_surface_pct", 0)
             if soft_val < 30:
-                # 固定大额惩罚：确保任何软路面≥0%的路线都优先于软路面<30%的路线
-                # 即使后者有海景加分(+35)，惩罚50分也能强制健康安全优先
                 penalty = 50.0
                 score -= penalty
                 logger.info(
@@ -226,11 +249,91 @@ def rank_routes(routes: list, params: dict) -> str:
     return best
 
 
+@require_http_methods(["GET"])
+def get_knowledge_graph(request):
+    """
+    知识图谱数据接口 GET /api/knowledge-graph/
+    返回知识图谱的节点和边数据，供前端可视化
+    """
+    try:
+        summary = get_knowledge_graph_summary()
+        return _cors_response({
+            "success": True,
+            "knowledge_graph": summary,
+            "description": "厦门运动路线知识图谱：包含地点、路线、特征节点及其关系",
+        })
+    except Exception as e:
+        return _cors_response({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_memory(request):
+    """
+    用户长期记忆摘要接口 GET /api/memory/
+    返回用户历史偏好统计和最近查询记录
+    """
+    session_id = request.GET.get("session_id", "default")
+    try:
+        summary = get_memory_summary(session_id)
+        return _cors_response({
+            "success": True,
+            "memory": summary,
+            "description": "用户长期记忆系统：基于PostgreSQL数据库持久化存储",
+        })
+    except Exception as e:
+        return _cors_response({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_rag_knowledge(request):
+    """
+    RAG知识库接口 GET /api/rag-knowledge/
+    返回知识库条目列表
+    """
+    try:
+        docs = []
+        for doc in XIAMEN_ROUTE_KNOWLEDGE:
+            docs.append({
+                "id": doc.get("id"),
+                "title": doc.get("title"),
+                "content": doc.get("content", "")[:300] + "...",
+                "tags": doc.get("tags", []),
+                "route_id": doc.get("route_id"),
+                "area": doc.get("area"),
+                "difficulty": doc.get("difficulty"),
+                "shade_pct": doc.get("shade_pct"),
+                "soft_surface_pct": doc.get("soft_surface_pct"),
+                "water_stations": doc.get("water_stations"),
+                "best_time": doc.get("best_time"),
+            })
+        return _cors_response({
+            "success": True,
+            "total": len(docs),
+            "documents": docs,
+            "description": "RAG知识库：厦门运动路线地理信息知识库，用于检索增强生成",
+        })
+    except Exception as e:
+        return _cors_response({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_water_stations(request):
+    """
+    水站POI数据接口 GET /api/water-stations/
+    返回水站坐标（WGS84，确保在陆地上）
+    """
+    return _cors_response({
+        "success": True,
+        "water_stations": WATER_STATIONS,
+        "total": len(WATER_STATIONS),
+        "coordinate_system": "WGS84",
+        "description": "水站POI数据：坐标已从高德GCJ-02转换为WGS84，确保在陆地上显示",
+    })
+
+
 def get_db_conn():
     if not HAS_PSYCOPG2:
         raise RuntimeError("psycopg2 未安装")
-    # 安全修复：移除密码默认值，强制要求通过环境变量注入
-    # 若 DB_PASSWORD 未设置，psycopg2 将抛出连接错误，而非使用硬编码密码
     return psycopg2.connect(
         host=os.environ.get("DB_HOST", "localhost"),
         port=int(os.environ.get("DB_PORT", 5432)),
@@ -254,7 +357,7 @@ def health_check(request):
         row = cur.fetchone()
         db_info = {
             "road_nodes": row[0], "road_edges": row[1], "pois": row[2],
-            "dem_points": row[3], "ndvi_samples": row[4]  # ndvi reuses dem_elevation count
+            "dem_points": row[3], "ndvi_samples": row[4]
         }
         conn.close()
     except Exception as e:
@@ -263,9 +366,10 @@ def health_check(request):
     return _cors_response({
         "status": "ok",
         "service": "Sports Companion API",
-        "version": "5.2.0",
+        "version": "6.0.0",
         "database": "PostgreSQL/PostGIS (Railway Cloud)",
         "city": "厦门市",
+        "features": ["RAG检索增强生成", "知识图谱", "长期记忆系统", "Agent智能体"],
         "database_stats": db_info
     })
 
