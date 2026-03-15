@@ -609,27 +609,133 @@ class RouteAgent:
         return docs
 
     def evaluate_routes(self, routes: List[dict], analysis: dict, knowledge: List[dict]) -> List[dict]:
-        """步骤3：基于知识库评估路线"""
+        """步骤3：基于路线属性和用户需求全面评估每条路线，确保每条路线都有完整分析"""
+        constraints = analysis.get("constraints", [])
+        preferences = analysis.get("preferences", [])
+        risk_factors = analysis.get("risk_factors", [])
+        has_joint_constraint = bool(constraints)  # 有关节约束
+        wants_shade = "树荫遮蔽" in preferences
+        wants_sea = "海景观赏" in preferences
+        wants_water = "补给水站" in preferences
+
         for route in routes:
             route_id = route.get("route_id", "")
             bonus = 0.0
             reasoning = []
 
-            # 基于知识库的额外评分
-            for doc in knowledge:
-                if doc.get("route_id") == route_id:
-                    if doc.get("soft_surface_pct", 0) > 40 and analysis["constraints"]:
-                        bonus += 10
-                        reasoning.append(f"软路面{doc['soft_surface_pct']}%，适合关节约束")
-                    if doc.get("shade_pct", 0) > 60 and "树荫遮蔽" in analysis["preferences"]:
-                        bonus += 8
-                        reasoning.append(f"树荫{doc['shade_pct']}%，满足遮阴需求")
+            # ---- 从路线属性直接提取数据 ----
+            soft_pct = route.get("soft_surface_pct", 0)
+            shade_pct = route.get("shade_coverage_pct", 0)
+            water_cnt = route.get("water_stations", 0)
+            if isinstance(water_cnt, list):
+                water_cnt = len(water_cnt)
+            elev = route.get("elevation_gain_m", 0)
+            has_sea = bool(route.get("sea_view_point") or route.get("coastal_ratio", 0) > 20)
+            dist_km = route.get("distance_km", 0)
+            area = route.get("area", "")
 
-            route["agent_bonus"] = bonus
+            # ---- 软路面评估（关节约束最重要） ----
+            if soft_pct >= 50:
+                reasoning.append(f"软路面比例{soft_pct}%，对关节冲击极小，非常适合脚踝不适者")
+                bonus += 15
+            elif soft_pct >= 30:
+                reasoning.append(f"软路面比例{soft_pct}%，混合路面，关节压力适中")
+                bonus += 8
+            elif soft_pct >= 15:
+                reasoning.append(f"软路面比例{soft_pct}%，以硬质路面为主，建议穿缓震跑鞋")
+                if has_joint_constraint:
+                    bonus -= 5
+            else:
+                reasoning.append(f"路面以沥青/水泥为主（软路面{soft_pct}%），关节约束者需注意")
+                if has_joint_constraint:
+                    bonus -= 10
+
+            # ---- 树荫评估 ----
+            if shade_pct >= 60:
+                reasoning.append(f"树荫覆盖{shade_pct}%，遮阴效果优秀，夏季运动首选")
+                if wants_shade:
+                    bonus += 12
+                else:
+                    bonus += 5
+            elif shade_pct >= 35:
+                reasoning.append(f"树荫覆盖{shade_pct}%，遮阴条件良好")
+                if wants_shade:
+                    bonus += 6
+            elif shade_pct >= 20:
+                reasoning.append(f"树荫覆盖{shade_pct}%，遮阴有限，建议清晨或傍晚运动")
+            else:
+                reasoning.append(f"树荫较少（{shade_pct}%），暴露路段较多，注意防晒")
+                if wants_shade:
+                    bonus -= 5
+
+            # ---- 水站评估 ----
+            if water_cnt >= 5:
+                reasoning.append(f"沿途{water_cnt}个补给水站，补给充足，适合长距离训练")
+                if wants_water:
+                    bonus += 10
+                else:
+                    bonus += 4
+            elif water_cnt >= 3:
+                reasoning.append(f"沿途{water_cnt}个水站，补给条件良好")
+                if wants_water:
+                    bonus += 6
+            elif water_cnt >= 1:
+                reasoning.append(f"沿途{water_cnt}个水站，建议自带部分饮水")
+            else:
+                reasoning.append("沿途无固定水站，务必自带充足饮水")
+                if wants_water:
+                    bonus -= 5
+
+            # ---- 海景评估 ----
+            if has_sea:
+                reasoning.append("路线经过海滨区域，可欣赏海景，视野开阔")
+                if wants_sea:
+                    bonus += 12
+                else:
+                    bonus += 3
+            else:
+                if wants_sea:
+                    reasoning.append("该路线以内陆/公园路段为主，海景观赏机会有限")
+                    bonus -= 3
+
+            # ---- 坡度评估 ----
+            if elev > 200:
+                reasoning.append(f"累计爬升{elev}m，坡度较大，关节约束者需谨慎")
+                if has_joint_constraint:
+                    bonus -= 12
+            elif elev > 80:
+                reasoning.append(f"累计爬升{elev}m，有一定起伏，增加训练强度")
+                if has_joint_constraint:
+                    bonus -= 5
+            else:
+                reasoning.append(f"地势平坦（爬升仅{elev}m），适合关节不适者稳定配速")
+                if has_joint_constraint:
+                    bonus += 8
+
+            # ---- 区域特色 ----
+            if "北部" in area or route_id == "ROUTE_D":
+                reasoning.append("位于厦门岛北部，人流量少，环境安静，适合专注训练")
+            elif "南部" in area or route_id == "ROUTE_A":
+                reasoning.append("位于厦门岛南部海滨，风景优美，氛围活跃")
+            elif "中部" in area or route_id == "ROUTE_B":
+                reasoning.append("位于厦门岛中部，绿化丰富，校园氛围浓厚")
+
+            # ---- 距离适配评估 ----
+            if dist_km > 0:
+                if dist_km >= 12:
+                    reasoning.append(f"全程{dist_km}km，属长距离路线，适合耐力训练")
+                elif dist_km >= 7:
+                    reasoning.append(f"全程{dist_km}km，中等距离，适合大多数训练目标")
+                else:
+                    reasoning.append(f"全程{dist_km}km，距离适中，适合轻松跑")
+
+            route["agent_bonus"] = round(bonus, 1)
             route["agent_reasoning"] = reasoning
-            route["comprehensive_score"] = route.get("comprehensive_score", 50) + bonus
+            route["comprehensive_score"] = round(
+                route.get("comprehensive_score", route.get("score", 50)) + bonus, 1
+            )
 
-        self.log_step("路线评估", f"完成{len(routes)}条路线的Agent评估")
+        self.log_step("路线评估", f"完成{len(routes)}条路线的Agent评估，每条路线均有{min(len(r.get('agent_reasoning',[])) for r in routes)}+条分析")
         return routes
 
     def generate_recommendation(self, routes: List[dict], analysis: dict) -> dict:
