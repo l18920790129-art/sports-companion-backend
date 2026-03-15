@@ -2,7 +2,7 @@
 builder = "nixpacks"
 
 [deploy]
-releaseCommand = "python scripts/init_xiamen_gis_data.py"
+releaseCommand = "python manage.py migrate --run-syncdb && python scripts/init_xiamen_gis_data.py"
 startCommand = "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
 healthcheckPath = "/api/health/"
 healthcheckTimeout = 30

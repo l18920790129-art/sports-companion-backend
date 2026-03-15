@@ -236,18 +236,18 @@ XIAMEN_ROUTE_KNOWLEDGE = [
 # ============================================================
 KNOWLEDGE_GRAPH = {
     "nodes": {
-        # 地点节点
-        "白城沙滩":     {"type": "location", "lat": 24.4402, "lon": 118.0842, "area": "南部"},
-        "曾厝垵":       {"type": "location", "lat": 24.4460, "lon": 118.1115, "area": "南部"},
-        "椰风寨":       {"type": "location", "lat": 24.4383, "lon": 118.0854, "area": "南部"},
-        "胡里山炮台":   {"type": "location", "lat": 24.4378, "lon": 118.1185, "area": "南部"},
-        "南普陀寺":     {"type": "location", "lat": 24.4581, "lon": 118.0665, "area": "中部"},
-        "厦门大学":     {"type": "location", "lat": 24.4508, "lon": 118.0725, "area": "中部"},
-        "万石山植物园": {"type": "location", "lat": 24.4587, "lon": 118.0718, "area": "中部"},
-        "五缘湾湿地公园": {"type": "location", "lat": 24.4613, "lon": 118.0965, "area": "北部"},
-        "五缘湾北岸":   {"type": "location", "lat": 24.505,  "lon": 118.095,  "area": "北部"},
-        "集美大桥头":   {"type": "location", "lat": 24.535,  "lon": 118.083,  "area": "北部"},
-        "莲前路":       {"type": "location", "lat": 24.490,  "lon": 118.090,  "area": "北部"},
+        # 地点节点（坐标均来自高德地图POI搜索API，100%真实数据）
+        "白城沙滩":     {"type": "location", "lat": 24.432104, "lon": 118.102892, "area": "南部"},  # 高德POI: 白城沙滩
+        "曾厝垵":       {"type": "location", "lat": 24.425286, "lon": 118.125370, "area": "南部"},  # 高德POI: 曾厝垵
+        "椰风寨":       {"type": "location", "lat": 24.442613, "lon": 118.161867, "area": "南部"},  # 高德POI: 椰风寨
+        "胡里山炮台":   {"type": "location", "lat": 24.429475, "lon": 118.106383, "area": "南部"},  # 高德POI: 胡里山炮台
+        "南普陀寺":     {"type": "location", "lat": 24.442641, "lon": 118.097143, "area": "中部"},  # 高德POI: 南普陀寺
+        "厦门大学":     {"type": "location", "lat": 24.436214, "lon": 118.102630, "area": "中部"},  # 高德POI: 厦门大学
+        "万石山植物园": {"type": "location", "lat": 24.447728, "lon": 118.109277, "area": "中部"},  # 高德POI: 厦门园林植物园
+        "五缘湾湿地公园": {"type": "location", "lat": 24.516071, "lon": 118.178133, "area": "北部"},  # 高德POI: 五缘湾湿地公园
+        "五缘湾北岸":   {"type": "location", "lat": 24.517807, "lon": 118.177176, "area": "北部"},  # 高德POI: 五缘湾
+        "集美大桥头":   {"type": "location", "lat": 24.581090, "lon": 118.113616, "area": "北部"},  # 高德POI: 集美大桥
+        "莲前路":       {"type": "location", "lat": 24.475165, "lon": 118.175086, "area": "北部"},  # 高德POI: 莲前集团大厦附近
         # 特征节点
         "海景":         {"type": "feature", "category": "scenery"},
         "树荫":         {"type": "feature", "category": "environment"},
@@ -303,13 +303,13 @@ KNOWLEDGE_GRAPH = {
 
 
 # ============================================================
-# 长期记忆系统（基于文件持久化）
+# 长期记忆系统（基于PostgreSQL数据库持久化，备用文件存储）
 # ============================================================
 MEMORY_FILE = os.path.join(os.path.dirname(__file__), "user_memory.json")
 
 
-def load_memory() -> dict:
-    """加载用户历史记忆"""
+def _load_memory_from_file() -> dict:
+    """从文件加载用户记忆（备用）"""
     if os.path.exists(MEMORY_FILE):
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
@@ -317,27 +317,56 @@ def load_memory() -> dict:
         except Exception:
             pass
     return {
-        "query_history": [],      # 历史查询记录
-        "preference_stats": {},   # 偏好统计
-        "route_feedback": {},     # 路线反馈
-        "session_count": 0,       # 会话次数
+        "query_history": [],
+        "preference_stats": {},
+        "route_feedback": {},
+        "session_count": 0,
     }
 
 
-def save_memory(memory: dict):
-    """保存用户记忆到文件"""
+def load_memory(session_id: str = "default") -> dict:
+    """加载用户历史记忆（优先数据库，备用文件）"""
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory, f, ensure_ascii=False, indent=2)
+        from .models import UserMemory
+        obj, _ = UserMemory.objects.get_or_create(session_id=session_id)
+        return {
+            "query_history": obj.query_history or [],
+            "preference_stats": obj.preference_stats or {},
+            "route_feedback": obj.route_feedback or {},
+            "session_count": obj.session_count,
+            "_db_obj": obj,
+        }
     except Exception as e:
-        print(f"[Memory] 保存记忆失败: {e}")
+        print(f"[Memory] 数据库加载失败，回退到文件存储: {e}")
+        return _load_memory_from_file()
 
 
-def update_memory(user_query: str, params: dict, recommended_route: str):
-    """更新用户记忆"""
-    memory = load_memory()
-    memory["session_count"] += 1
+def save_memory(memory: dict, session_id: str = "default"):
+    """保存用户记忆（优先数据库，备用文件）"""
+    try:
+        from .models import UserMemory
+        obj = memory.get("_db_obj")
+        if obj is None:
+            obj, _ = UserMemory.objects.get_or_create(session_id=session_id)
+        obj.query_history = memory.get("query_history", [])
+        obj.preference_stats = memory.get("preference_stats", {})
+        obj.route_feedback = memory.get("route_feedback", {})
+        obj.session_count = memory.get("session_count", 0)
+        obj.save()
+    except Exception as e:
+        print(f"[Memory] 数据库保存失败，回退到文件存储: {e}")
+        try:
+            clean = {k: v for k, v in memory.items() if k != "_db_obj"}
+            with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(clean, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
+
+def update_memory(user_query: str, params: dict, recommended_route: str, session_id: str = "default"):
+    """更新用户记忆（数据库持久化）"""
+    memory = load_memory(session_id)
+    memory["session_count"] = memory.get("session_count", 0) + 1
     # 记录查询历史（最多保留50条）
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -349,30 +378,29 @@ def update_memory(user_query: str, params: dict, recommended_route: str):
         "health_constraints": params.get("health_constraints", []),
         "recommended_route": recommended_route,
     }
-    memory["query_history"].insert(0, entry)
-    memory["query_history"] = memory["query_history"][:50]
-
+    history = memory.get("query_history", [])
+    history.insert(0, entry)
+    memory["query_history"] = history[:50]
     # 更新偏好统计
+    stats = memory.get("preference_stats", {})
     for feature in params.get("preferred_features", []):
-        memory["preference_stats"][feature] = memory["preference_stats"].get(feature, 0) + 1
+        stats[feature] = stats.get(feature, 0) + 1
     for constraint in params.get("health_constraints", []):
         key = f"constraint_{constraint}"
-        memory["preference_stats"][key] = memory["preference_stats"].get(key, 0) + 1
-
-    save_memory(memory)
+        stats[key] = stats.get(key, 0) + 1
+    memory["preference_stats"] = stats
+    save_memory(memory, session_id)
     return memory
 
 
-def get_memory_context(params: dict) -> str:
+def get_memory_context(params: dict, session_id: str = "default") -> str:
     """根据历史记忆生成上下文提示"""
-    memory = load_memory()
-    if memory["session_count"] == 0:
+    memory = load_memory(session_id)
+    if memory.get("session_count", 0) == 0:
         return ""
-
     context_parts = []
-
     # 分析偏好趋势
-    stats = memory["preference_stats"]
+    stats = memory.get("preference_stats", {})
     if stats:
         top_prefs = sorted(stats.items(), key=lambda x: x[1], reverse=True)[:3]
         pref_names = {
@@ -382,16 +410,14 @@ def get_memory_context(params: dict) -> str:
         }
         top_str = "、".join([pref_names.get(k, k) for k, _ in top_prefs])
         context_parts.append(f"用户历史偏好：{top_str}")
-
     # 最近3次查询
-    recent = memory["query_history"][:3]
+    recent = memory.get("query_history", [])[:3]
     if recent:
-        activities = [r["activity_type"] for r in recent]
+        activities = [r.get("activity_type", "跑步") for r in recent]
         most_common = max(set(activities), key=activities.count)
         context_parts.append(f"最近常做运动：{most_common}")
-
+        context_parts.append(f"累计使用{memory['session_count']}次")
     return "；".join(context_parts) if context_parts else ""
-
 
 # ============================================================
 # TF-IDF 简易实现（不依赖外部库）

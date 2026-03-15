@@ -415,10 +415,30 @@ def verify_data(conn):
         print(f"  {row[0]}: {row[1]}")
 
 
+def run_django_migrate():
+    """运行Django数据库迁移，创建route_history和user_memory表"""
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "manage.py", "migrate", "--run-syncdb"],
+            capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        if result.returncode == 0:
+            print("[Django] 数据库迁移成功")
+        else:
+            print(f"[Django] 迁移输出: {result.stdout}")
+            print(f"[Django] 迁移错误: {result.stderr}")
+    except Exception as e:
+        print(f"[Django] 迁移失败（不影响GIS数据初始化）: {e}")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("厦门市GIS数据初始化脚本")
     print("=" * 60)
+
+    # 先运行Django迁移，创建应用表
+    run_django_migrate()
 
     try:
         conn = psycopg2.connect(**DB_CONFIG)
